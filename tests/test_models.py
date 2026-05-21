@@ -122,6 +122,73 @@ class TestSummaryResult:
         assert "PARTICIPANTS" in output
         assert "METADATA" in output
         assert "Alice" in output
+        assert "Tokens:" in output
+        assert "LLM cost:" not in output
+
+    def test_tokens_format_with_k_suffix(self) -> None:
+        result = SummaryResult(
+            tldr="- Key point",
+            narrative="The story goes...",
+            participants=["Alice"],
+            metadata=SummaryMeta(
+                thread_length=5,
+                cost=0.0042,
+                model_used="test-model",
+                duration_seconds=1.0,
+                input_tokens=35690,
+                output_tokens=1820,
+                cache_read_tokens=1000,
+                cache_write_tokens=0,
+                reasoning_tokens=653,
+            ),
+        )
+        output = str(result)
+        assert "35.69K" in output
+        assert "1.82K" in output
+        assert "653" in output
+
+    def test_tokens_format_with_small_counts(self) -> None:
+        result = SummaryResult(
+            tldr="- Key point",
+            narrative="The story goes...",
+            participants=["Alice"],
+            metadata=SummaryMeta(
+                thread_length=5,
+                cost=0.0001,
+                model_used="test-model",
+                duration_seconds=1.0,
+                input_tokens=500,
+                output_tokens=500,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                reasoning_tokens=0,
+            ),
+        )
+        output = str(result)
+        assert "Tokens: ↑ input 500 • ↓ output 500 • $ 0.00" in output
+        assert "cache hit" not in output
+        assert "reasoning" not in output
+
+    def test_tokens_omit_zero_cache_hit_and_reasoning(self) -> None:
+        result = SummaryResult(
+            tldr="- Key point",
+            narrative="The story goes...",
+            participants=["Alice"],
+            metadata=SummaryMeta(
+                thread_length=5,
+                cost=0.00,
+                model_used="test-model",
+                duration_seconds=1.0,
+                input_tokens=500,
+                output_tokens=500,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                reasoning_tokens=0,
+            ),
+        )
+        output = str(result)
+        assert "cache hit" not in output
+        assert "reasoning" not in output
 
 
 class TestPostThread:

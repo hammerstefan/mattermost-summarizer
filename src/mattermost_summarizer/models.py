@@ -72,6 +72,18 @@ class SummaryMeta(BaseModel):
     cost: float = 0.0
     model_used: str = ""
     duration_seconds: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+
+
+def _format_token_count(value: int) -> str:
+    """Format a token count with K suffix for >= 1000."""
+    if value >= 1000:
+        return f"{value / 1000:.2f}K"
+    return str(value)
 
 
 class SummaryResult(BaseModel):
@@ -145,10 +157,25 @@ class SummaryResult(BaseModel):
                 "METADATA",
                 "=" * 70,
                 f"  Thread length: {self.metadata.thread_length} posts",
-                f"  LLM cost: ${self.metadata.cost:.4f}",
                 f"  Model: {self.metadata.model_used}",
                 f"  Duration: {self.metadata.duration_seconds:.1f}s",
             ]
         )
+
+        tokens_parts = [f"↑ input {_format_token_count(self.metadata.input_tokens)}"]
+
+        cache_read = self.metadata.cache_read_tokens
+        input_with_cache = self.metadata.input_tokens + cache_read
+        if input_with_cache > 0 and cache_read > 0:
+            cache_hit_pct = (cache_read / input_with_cache) * 100
+            tokens_parts.append(f"cache hit {cache_hit_pct:.2f}%")
+
+        if self.metadata.reasoning_tokens > 0:
+            tokens_parts.append(f"reasoning {self.metadata.reasoning_tokens}")
+
+        tokens_parts.append(f"↓ output {_format_token_count(self.metadata.output_tokens)}")
+        tokens_parts.append(f"$ {self.metadata.cost:.2f}")
+
+        lines.append(f"  Tokens: {' • '.join(tokens_parts)}")
 
         return "\n".join(lines)
