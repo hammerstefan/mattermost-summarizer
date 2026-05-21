@@ -69,3 +69,104 @@ If `semble` is not on `$PATH`, use `uvx --from "semble[mcp]" semble` in its plac
 2. Inspect full files only when the returned chunk is not enough context.
 3. Optionally use `semble find-related` with a promising result's `file_path` and `line` to discover related implementations.
 4. Use grep only when you need exhaustive literal matches or quick confirmation of an exact string.
+
+## OpenHands SDK Integration
+
+This project uses the [OpenHands SDK](https://github.com/openhands/software-agent-sdk) for building agents. Key integration patterns:
+
+### Tool Creation Pattern
+
+The OpenHands SDK expects a specific tool creation pattern. **Do NOT** directly instantiate `ToolDefinition` - it is abstract.
+
+```python
+# ❌ WRONG - ToolDefinition is abstract, can't be instantiated directly
+executor = FetchThreadExecutor(client)
+return [ToolDefinition(
+    description="...",
+    action_type=FetchThreadAction,
+    observation_type=FetchThreadObservation,
+    executor=executor,
+)]
+
+# ✅ CORRECT - Subclass ToolDefinition with create() classmethod
+class FetchThreadTool(ToolDefinition[FetchThreadAction, FetchThreadObservation]):
+    @classmethod
+    def create(cls, client=None, **kwargs):
+        executor = FetchThreadExecutor(client) if client else None
+        return [cls(
+            description="Fetch a Mattermost thread...",
+            action_type=FetchThreadAction,
+            observation_type=FetchThreadObservation,
+            executor=executor,
+        )]
+```
+
+### Tool Registration and Usage
+
+Two patterns work for providing tools to an `Agent`:
+
+**Pattern A: Register tool globally, reference by name**
+```python
+from openhands.sdk import Agent, LLM, Tool, register_tool
+
+# Register the tool
+register_tool('fetch_thread', FetchThreadTool)
+
+# Use with Agent via Tool spec (only needs name + params)
+agent = Agent(
+    llm=LLM(model="openai/gpt-4o", api_key=SecretStr("...")),
+    tools=[Tool(name='fetch_thread', params={'client': client})]
+)
+```
+
+**Pattern B: Use tool's kind property directly**
+```python
+# Agent expects list[openhands.sdk.tool.spec.Tool]
+# Tool(name=..., params=...) where name must match ToolDefinition.kind
+agent = Agent(llm=llm, tools=[Tool(name='finish', params={})])
+```
+
+### Conversation Types
+
+Two conversation classes exist with different interfaces:
+
+- `Conversation` - Base class, minimal interface
+- `LocalConversation` - Subclass with full functionality (`send_message`, `run`, `stuck_detector`)
+
+**Important:** `LocalConversation` is NOT a subclass of `Conversation`. They're parallel branches under `BaseConversation`.
+
+```python
+# ❌ WRONG - type checker will complain
+def _extract_finish_action(conversation: Conversation, ...):
+
+# ✅ CORRECT - use appropriate type for your needs
+def _extract_finish_action(conversation: LocalConversation, ...):
+```
+
+### SDK Type Stub Status
+
+The OpenHands SDK (v1.23.0) has **incomplete type stubs**:
+- No `.pyi` stub files
+- Many exports untyped or in `TYPE_CHECKING` blocks
+- `mypy` and `pyright` will report errors even for correct runtime behavior
+
+**Recommendations:**
+1. Prefer runtime verification over type checking for SDK API correctness
+2. Run tests (`uv run pytest`) to verify functionality
+3. Suppress type errors with `# type: ignore` when you can verify the code works at runtime
+
+### Executor Pattern
+
+`ToolExecutor` is an abstract base class. Implement `__call__`:
+
+```python
+from openhands.sdk.tool import ToolExecutor
+
+class FetchThreadExecutor(ToolExecutor[FetchThreadAction, FetchThreadObservation]):
+    def __init__(self, client):
+        self.client = client
+
+    def __call__(self, action: FetchThreadAction, conversation=None) -> FetchThreadObservation:
+        # Implementation
+        return FetchThreadObservation(...)
+```
