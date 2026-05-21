@@ -1,0 +1,193 @@
+"""Main summarizer module for mattermost-summarizer."""
+
+import tempfile
+import time
+from pathlib import Path
+
+from openhands.sdk import LocalConversation
+
+from mattermost_summarizer.agent import SYSTEM_PROMPT, build_summarizer_agent
+from mattermost_summarizer.client import MattermostClient
+from mattermost_summarizer.config import MattermostSummarizerConfig
+from mattermost_summarizer.exceptions import (
+    AgentStuckError,
+    PermalinkError,
+)
+from mattermost_summarizer.models import SummaryMeta, SummaryResult
+from mattermost_summarizer.tools import build_mattermost_tools
+from mattermost_summarizer.tools.finish import FinishAction
+from mattermost_summarizer.utils import parse_permalink
+
+
+class MattermostSummarizer:
+    """High-level API for summarizing Mattermost conversation threads.
+
+    Example usage:
+        summarizer = MattermostSummarizer.from_config("mattermost-summarizer.toml")
+        result = summarizer.summarize("https://chat.canonical.com/canonical/pl/abc123xyz")
+        print(result)
+
+    Or with environment variables:
+        summarizer = MattermostSummarizer.from_env()
+        result = summarizer.summarize("https://chat.example.com/team/pl/post123")
+        print(result.tldr)
+    """
+
+    def __init__(self, config: MattermostSummarizerConfig) -> None:
+        self.config = config
+
+    @classmethod
+    def from_config(cls, path: Path | str) -> "MattermostSummarizer":
+        """Load configuration from a TOML file.
+
+        Args:
+            path: Path to TOML config file
+
+        Returns:
+            MattermostSummarizer instance
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ConfigError: If config is invalid
+        """
+        config = MattermostSummarizerConfig.from_config(path)
+        return cls(config)
+
+    @classmethod
+    def from_env(cls) -> "MattermostSummarizer":
+        """Load configuration from environment variables.
+
+        Returns:
+            MattermostSummarizer instance
+        """
+        config = MattermostSummarizerConfig.from_env()
+        return cls(config)
+
+    def summarize(self, permalink_url: str) -> SummaryResult:
+        """Summarize a Mattermost thread from a permalink URL.
+
+        Args:
+            permalink_url: A Mattermost permalink (e.g., https://chat.example.com/team/pl/abc123)
+
+        Returns:
+            SummaryResult with tldr, narrative, action_items, participants, and metadata
+
+        Raises:
+            PermalinkError: If URL format is invalid
+            AuthenticationError: If Mattermost API returns 401
+            ThreadNotFoundError: If thread doesn't exist (404)
+            AgentStuckError: If agent gets stuck and cannot complete
+        """
+        start_time = time.time()
+
+        try:
+            post_id = parse_permalink(permalink_url)
+        except ValueError as e:
+            raise PermalinkError(str(e)) from e
+
+        with (
+            MattermostClient(
+                base_url=str(self.config.mattermost_url),
+                token=self.config.mattermost_token.get_secret_value(),
+            ) as client,
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
+            tools = build_mattermost_tools(client)
+
+            agent = build_summarizer_agent(
+                llm_model=self.config.llm_model,
+                llm_api_key=self.config.llm_api_key.get_secret_value(),
+                llm_base_url=self.config.llm_base_url,
+                tools=tools,
+            )
+
+            conversation = LocalConversation(agent=agent, workspace=tmpdir)
+
+            message: str = (
+                f"Summarize this Mattermost thread: {permalink_url}\nThe post ID is: {post_id}\n\n{SYSTEM_PROMPT}"
+            )
+            conversation.send_message(message)
+
+            conversation.run()
+
+            try:
+                finish_action = _extract_finish_action(conversation)
+
+                if finish_action is None:
+                    if conversation.stuck_detector and conversation.stuck_detector.is_stuck():
+                        raise AgentStuckError(
+                            "Agent got stuck and could not complete the summarization. "
+                            "This may be due to repeated actions or context issues."
+                        )
+                    raise AgentStuckError("Agent did not produce a finish action. The summary could not be extracted.")
+
+                duration = time.time() - start_time
+
+                cost = 0.0
+                if hasattr(agent.llm, "metrics") and agent.llm.metrics:
+                    cost = getattr(agent.llm.metrics, "accumulated_cost", 0.0)
+
+                thread_length = 1
+                if hasattr(finish_action, "tldr"):
+                    thread_length = _estimate_thread_length(conversation)
+
+                return SummaryResult(
+                    tldr=finish_action.tldr,
+                    narrative=finish_action.narrative,
+                    action_items=finish_action.action_items,
+                    participants=finish_action.participants,
+                    metadata=SummaryMeta(
+                        thread_length=thread_length,
+                        cost=cost,
+                        model_used=self.config.llm_model,
+                        duration_seconds=duration,
+                    ),
+                )
+            finally:
+                conversation.close()
+
+
+def _extract_finish_action(conversation: LocalConversation) -> FinishAction | None:
+    """Scan conversation events for a FinishAction."""
+    if not hasattr(conversation, "state") or not conversation.state:
+        return None
+
+    events = getattr(conversation.state, "events", [])
+
+    for event in reversed(events):
+        if hasattr(event, "action") and event.action is not None:
+            action: FinishAction = event.action
+            if hasattr(action, "tldr") and hasattr(action, "narrative"):
+                return action
+
+        if hasattr(event, "observation") and event.observation is not None:
+            obs = event.observation
+            if hasattr(obs, "success") and hasattr(obs, "summary_provided"):
+                if obs.summary_provided:
+                    for prev_event in reversed(events):
+                        if hasattr(prev_event, "action") and prev_event.action is not None:
+                            prev_action: FinishAction = prev_event.action
+                            if hasattr(prev_action, "tldr"):
+                                return prev_action
+
+    return None
+
+
+def _estimate_thread_length(conversation: LocalConversation) -> int:
+    """Estimate the number of posts in the thread from conversation events."""
+    fetch_count = 0
+
+    if hasattr(conversation, "state") and conversation.state:
+        events = getattr(conversation.state, "events", [])
+        for event in events:
+            if hasattr(event, "action") and event.action is not None:
+                action = event.action
+                if hasattr(action, "post_id"):
+                    fetch_count += 1
+
+            if hasattr(event, "observation") and event.observation is not None:
+                obs = event.observation
+                if hasattr(obs, "total_replies"):
+                    return int(obs.total_replies) + 1
+
+    return fetch_count + 1

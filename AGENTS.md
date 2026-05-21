@@ -143,18 +143,6 @@ def _extract_finish_action(conversation: Conversation, ...):
 def _extract_finish_action(conversation: LocalConversation, ...):
 ```
 
-### SDK Type Stub Status
-
-The OpenHands SDK (v1.23.0) has **incomplete type stubs**:
-- No `.pyi` stub files
-- Many exports untyped or in `TYPE_CHECKING` blocks
-- `mypy` and `pyright` will report errors even for correct runtime behavior
-
-**Recommendations:**
-1. Prefer runtime verification over type checking for SDK API correctness
-2. Run tests (`uv run pytest`) to verify functionality
-3. Suppress type errors with `# type: ignore` when you can verify the code works at runtime
-
 ### Executor Pattern
 
 `ToolExecutor` is an abstract base class. Implement `__call__`:

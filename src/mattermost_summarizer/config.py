@@ -1,0 +1,108 @@
+"""Configuration for mattermost-summarizer using pydantic-settings."""
+
+from pathlib import Path
+from typing import Any
+
+from pydantic import Field, HttpUrl, SecretStr
+from pydantic_settings import (
+    BaseSettings,
+    SettingsConfigDict,
+)
+
+
+class MattermostSummarizerConfig(BaseSettings):
+    """Configuration for Mattermost Summarizer.
+
+    Supports TOML as primary config source with MM_ env var override.
+    Order of precedence: env var > TOML > defaults.
+
+    Example TOML (mattermost-summarizer.toml):
+        [mattermost]
+        url = "https://chat.canonical.com"
+        token = "your-mattermost-token"
+
+        [llm]
+        model = "openai/gpt-4o"
+        api_key = "your-llm-api-key"
+        base_url = "https://api.openai.com/v1"  # optional
+
+    Example env vars:
+        MM_MATTERMOST_URL=https://chat.canonical.com
+        MM_MATTERMOST_TOKEN=your-token
+        MM_LLM_MODEL=openai/gpt-4o
+        MM_LLM_API_KEY=your-key
+        MM_LLM_BASE_URL=https://api.openai.com/v1
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="MM_",
+        env_nested_delimiter="_",
+        extra="ignore",
+    )
+
+    mattermost_url: HttpUrl = Field(description="Mattermost server URL (e.g., https://chat.canonical.com)")
+    mattermost_token: SecretStr = Field(description="Mattermost personal access token")
+    llm_api_key: SecretStr = Field(description="LLM API key")
+    llm_model: str = Field(
+        default="openai/gpt-4o",
+        description="LLM model (LiteLLM format: provider/model-name)",
+    )
+    llm_base_url: str | None = Field(
+        default=None,
+        description="LLM API base URL (None = provider default)",
+    )
+
+    @classmethod
+    def from_config(cls, path: Path | str) -> "MattermostSummarizerConfig":
+        """Load config from a TOML file.
+
+        Args:
+            path: Path to TOML config file
+
+        Returns:
+            Config instance with values from TOML (may be overridden by env vars)
+
+        Raises:
+            ConfigError: If TOML file cannot be read
+        """
+        toml_path = Path(path)
+        if not toml_path.exists():
+            raise FileNotFoundError(f"Config file not found: {toml_path}")
+
+        try:
+            import tomli  # type: ignore[import-not-found]  # pyright: ignore[reportMissingImports, reportUnusedImport]
+        except ImportError:
+            import tomllib as tomli  # Python 3.11+
+
+        with open(toml_path, "rb") as f:
+            toml_data = tomli.load(f)  # pyright: ignore[reportUnknownVariableType, reportMemberType]  # type: ignore[assignment]
+
+        # Extract nested [mattermost] and [llm] sections
+        data: dict[str, Any] = {}
+
+        if "mattermost" in toml_data:
+            mm: dict[str, Any] = dict(toml_data["mattermost"])  # pyright: ignore[reportArgumentType]  # type: ignore[misc]
+            if "url" in mm:
+                data["mattermost_url"] = mm["url"]
+            if "token" in mm:
+                data["mattermost_token"] = mm["token"]
+
+        if "llm" in toml_data:
+            llm: dict[str, Any] = dict(toml_data["llm"])  # pyright: ignore[reportArgumentType]  # type: ignore[misc]
+            if "model" in llm:
+                data["llm_model"] = llm["model"]
+            if "api_key" in llm:
+                data["llm_api_key"] = llm["api_key"]
+            if "base_url" in llm:
+                data["llm_base_url"] = llm["base_url"]
+
+        return cls(**data)
+
+    @classmethod
+    def from_env(cls) -> "MattermostSummarizerConfig":
+        """Load config from environment variables only.
+
+        Returns:
+            Config instance from MM_* env vars
+        """
+        return cls.model_validate({})

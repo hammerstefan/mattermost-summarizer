@@ -1,0 +1,213 @@
+"""Mattermost API client using httpx."""
+
+from datetime import datetime
+from typing import Any
+
+import httpx
+
+from mattermost_summarizer.exceptions import (
+    AuthenticationError,
+    ChannelNotFoundError,
+    ThreadNotFoundError,
+    UserNotFoundError,
+)
+from mattermost_summarizer.models import (
+    Channel,
+    PostData,
+    PostThread,
+    ReactionData,
+    UserProfile,
+)
+
+
+class MattermostClient:
+    """Sync HTTP client for Mattermost API v4.
+
+    All methods are lazy — no network calls until invoked.
+    Shared instance across tool executors for connection pooling.
+    """
+
+    def __init__(self, base_url: str, token: str) -> None:
+        """Initialize the Mattermost client.
+
+        Args:
+            base_url: Mattermost server URL (e.g., https://chat.canonical.com)
+            token: Bearer token for authentication
+        """
+        self._http = httpx.Client(
+            base_url=f"{base_url}/api/v4",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            timeout=30.0,
+        )
+        self._user_cache: dict[str, UserProfile] = {}
+
+    def close(self) -> None:
+        """Close the HTTP client and release resources."""
+        self._http.close()
+
+    def get_post_thread(self, post_id: str) -> PostThread:
+        """Fetch a complete thread (root post + all replies).
+
+        Args:
+            post_id: The root post ID
+
+        Returns:
+            PostThread with root post, replies, and channel info
+
+        Raises:
+            ThreadNotFoundError: If the post doesn't exist (404)
+            AuthenticationError: If unauthorized (401)
+        """
+        response = self._http.get(f"/posts/{post_id}/thread")
+
+        if response.status_code == 401:
+            raise AuthenticationError("Mattermost API authentication failed. Check your token.")
+        if response.status_code == 404:
+            raise ThreadNotFoundError(f"Post not found: {post_id}")
+
+        response.raise_for_status()
+        data = response.json()
+
+        posts = data.get("posts", {})
+        root_id = data.get("root_id", post_id)
+
+        if root_id not in posts:
+            raise ThreadNotFoundError(f"Root post not found: {root_id}")
+
+        root_post = self._parse_post(posts[root_id])
+
+        replies: list[PostData] = []
+        for pid, post_data in posts.items():
+            if pid != root_id:
+                replies.append(self._parse_post(post_data))
+
+        replies.sort(key=lambda p: p.created_at)
+
+        channel_id = data.get("channel_id", "")
+        channel_name = data.get("channel_name")
+
+        return PostThread(
+            root=root_post,
+            replies=replies,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            total_replies=len(replies),
+        )
+
+    def get_user(self, user_id: str) -> UserProfile:
+        """Fetch a user profile by ID.
+
+        Args:
+            user_id: The user ID
+
+        Returns:
+            UserProfile with user details
+
+        Raises:
+            UserNotFoundError: If user doesn't exist (404)
+            AuthenticationError: If unauthorized (401)
+        """
+        if user_id in self._user_cache:
+            return self._user_cache[user_id]
+
+        response = self._http.get(f"/users/{user_id}")
+
+        if response.status_code == 401:
+            raise AuthenticationError("Mattermost API authentication failed. Check your token.")
+        if response.status_code == 404:
+            raise UserNotFoundError(f"User not found: {user_id}")
+
+        response.raise_for_status()
+        data = response.json()
+
+        profile = UserProfile(
+            id=data["id"],
+            username=data.get("username", ""),
+            display_name=data.get("display_name") or data.get("nickname", ""),
+            email=data.get("email"),
+            nickname=data.get("nickname"),
+            first_name=data.get("first_name"),
+            last_name=data.get("last_name"),
+        )
+
+        self._user_cache[user_id] = profile
+        return profile
+
+    def get_channel(self, channel_id: str) -> Channel:
+        """Fetch a channel by ID.
+
+        Args:
+            channel_id: The channel ID
+
+        Returns:
+            Channel with details
+
+        Raises:
+            ChannelNotFoundError: If channel doesn't exist (404)
+            AuthenticationError: If unauthorized (401)
+        """
+        response = self._http.get(f"/channels/{channel_id}")
+
+        if response.status_code == 401:
+            raise AuthenticationError("Mattermost API authentication failed. Check your token.")
+        if response.status_code == 404:
+            raise ChannelNotFoundError(f"Channel not found: {channel_id}")
+
+        response.raise_for_status()
+        data = response.json()
+
+        team_name = None
+        if "team_name" in data:
+            team_name = data["team_name"]
+        elif "team_id" in data:
+            try:
+                team_response = self._http.get(f"/teams/{data['team_id']}")
+                if team_response.is_success:
+                    team_name = team_response.json().get("name")
+            except Exception:
+                pass
+
+        return Channel(
+            id=data["id"],
+            name=data.get("name", ""),
+            display_name=data.get("display_name", ""),
+            purpose=data.get("purpose"),
+            header=data.get("header"),
+            team_name=team_name,
+            type=data.get("type", "O"),
+        )
+
+    def _parse_post(self, data: dict[str, Any]) -> PostData:
+        """Parse a raw post dict into a PostData model."""
+        reactions: list[ReactionData] = []
+        if "reactions" in data and data["reactions"]:
+            for r in data["reactions"]:
+                reactions.append(
+                    ReactionData(
+                        user_id=r.get("user_id", ""),
+                        emoji_name=r.get("emoji_name", ""),
+                        create_at=datetime.fromtimestamp(r.get("create_at", 0) / 1000),
+                    )
+                )
+
+        return PostData(
+            id=data["id"],
+            author_id=data.get("user_id", ""),
+            author_username=None,
+            author_display_name=None,
+            message=data.get("message", ""),
+            created_at=datetime.fromtimestamp(data.get("create_at", 0) / 1000),
+            reply_count=data.get("reply_count", 0),
+            reactions=reactions,
+            attachments=data.get("file_ids", []),
+            props=data.get("props", {}),
+        )
+
+    def __enter__(self) -> "MattermostClient":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.close()

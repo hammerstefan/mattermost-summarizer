@@ -1,4 +1,7 @@
+__pycache__/
+*.pyc
 .venv/
 .logs/
 .opencode/
 session-*
+uv.lock
