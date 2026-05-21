@@ -5,16 +5,18 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import logging
 import os
 import sys
 from pathlib import Path
 
+logging.getLogger("litellm").setLevel(logging.ERROR)
 os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
-
-from mattermost_summarizer.utils import cleanup_external_loggers, setup_logging
 
 
 def main() -> int:
+    from mattermost_summarizer.utils import cleanup_external_loggers, setup_logging
+
     setup_logging()
 
     from mattermost_summarizer.config import MattermostSummarizerConfig

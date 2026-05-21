@@ -45,6 +45,10 @@ def cleanup_external_loggers() -> None:
     Call this after importing litellm/openhands to ensure they don't
     write to stderr.
     """
+    import litellm
+
+    litellm.suppress_debug_info = True
+
     for logger_name in ("LiteLLM", "litellm", "openhands"):
         logger = logging.getLogger(logger_name)
         for handler in list(logger.handlers):
@@ -56,6 +60,8 @@ def cleanup_external_loggers() -> None:
                 logger.addHandler(root.handlers[0])
             else:
                 logger.addHandler(logging.NullHandler())
+
+    logging.getLogger("litellm").setLevel(logging.ERROR)
 
 
 def parse_permalink(url: str) -> str:
