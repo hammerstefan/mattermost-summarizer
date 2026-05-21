@@ -4,14 +4,24 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import os
 import sys
 from pathlib import Path
 
-from mattermost_summarizer.config import MattermostSummarizerConfig
-from mattermost_summarizer.summarizer import MattermostSummarizer
+os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
+
+from mattermost_summarizer.utils import cleanup_external_loggers, setup_logging
 
 
 def main() -> int:
+    setup_logging()
+
+    from mattermost_summarizer.config import MattermostSummarizerConfig
+    from mattermost_summarizer.summarizer import MattermostSummarizer
+
+    cleanup_external_loggers()
+
     parser = argparse.ArgumentParser(description="Summarize a Mattermost thread")
     parser.add_argument(
         "url",
@@ -46,7 +56,8 @@ def main() -> int:
 
     try:
         summarizer = MattermostSummarizer(config)
-        result = summarizer.summarize(args.url)
+        with contextlib.redirect_stdout(sys.stderr):
+            result = summarizer.summarize(args.url)
     except Exception as e:
         print(f"Error summarizing thread: {e}", file=sys.stderr)
         return 1
