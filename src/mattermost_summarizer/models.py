@@ -78,6 +78,7 @@ class SummaryResult(BaseModel):
     """Result of summarizing a Mattermost thread."""
 
     tldr: str
+    key_findings: list[str] = []
     narrative: str
     action_items: list[str] = []
     participants: list[str] = []
@@ -90,12 +91,29 @@ class SummaryResult(BaseModel):
             "TL;DR",
             "=" * 70,
             self.tldr,
-            "",
-            "=" * 70,
-            "NARRATIVE",
-            "=" * 70,
-            self.narrative,
         ]
+
+        if self.key_findings:
+            lines.extend(
+                [
+                    "",
+                    "=" * 70,
+                    "KEY FINDINGS",
+                    "=" * 70,
+                ]
+            )
+            for finding in self.key_findings:
+                lines.append(f"  • {finding}")
+
+        lines.extend(
+            [
+                "",
+                "=" * 70,
+                "NARRATIVE",
+                "=" * 70,
+                self.narrative,
+            ]
+        )
 
         if self.action_items:
             lines.extend(

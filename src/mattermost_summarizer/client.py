@@ -35,7 +35,7 @@ class MattermostClient:
             token: Bearer token for authentication
         """
         self._http = httpx.Client(
-            base_url=f"{base_url}/api/v4",
+            base_url=f"{base_url.rstrip('/')}/api/v4",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -72,8 +72,14 @@ class MattermostClient:
         data = response.json()
 
         posts = data.get("posts", {})
-        root_id = data.get("root_id", post_id)
-
+        order = data.get("order", [])
+        if order:
+            root_id = order[0]
+        else:
+            root_id = next(
+                (pid for pid, p in posts.items() if p.get("root_id") == "" or p.get("root_id") == pid),
+                post_id,
+            )
         if root_id not in posts:
             raise ThreadNotFoundError(f"Root post not found: {root_id}")
 
@@ -86,8 +92,15 @@ class MattermostClient:
 
         replies.sort(key=lambda p: p.created_at)
 
-        channel_id = data.get("channel_id", "")
+        channel_id = posts[root_id].get("channel_id", "") or data.get("channel_id", "")
         channel_name = data.get("channel_name")
+        if channel_id and not channel_name:
+            try:
+                channel_response = self._http.get(f"/channels/{channel_id}")
+                if channel_response.is_success:
+                    channel_name = channel_response.json().get("name")
+            except Exception:
+                pass
 
         return PostThread(
             root=root_post,
@@ -126,7 +139,10 @@ class MattermostClient:
         profile = UserProfile(
             id=data["id"],
             username=data.get("username", ""),
-            display_name=data.get("display_name") or data.get("nickname", ""),
+            display_name=data.get("display_name")
+            or data.get("first_name")
+            or data.get("nickname")
+            or data.get("username", ""),
             email=data.get("email"),
             nickname=data.get("nickname"),
             first_name=data.get("first_name"),
@@ -183,8 +199,9 @@ class MattermostClient:
     def _parse_post(self, data: dict[str, Any]) -> PostData:
         """Parse a raw post dict into a PostData model."""
         reactions: list[ReactionData] = []
-        if "reactions" in data and data["reactions"]:
-            for r in data["reactions"]:
+        metadata = data.get("metadata", {})
+        if metadata.get("reactions"):
+            for r in metadata["reactions"]:
                 reactions.append(
                     ReactionData(
                         user_id=r.get("user_id", ""),

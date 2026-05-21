@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mattermost_summarizer.tools.finish.definition import (
-    FinishAction,
-    FinishExecutor,
-    FinishObservation,
-    FinishTool,
+    SummarizerFinishAction,
+    SummarizerFinishExecutor,
+    SummarizerFinishObservation,
+    SummarizerFinishTool,
 )
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ def get_finish_tool() -> Tool:
     from openhands.sdk import register_tool  # pyright: ignore[reportUnknownVariableType]
 
     if not _registered:
-        instance = FinishTool.create()[0]
+        instance = SummarizerFinishTool.create()[0]
         register_tool("finish", instance)
         _registered = True
 
@@ -32,9 +32,9 @@ def get_finish_tool() -> Tool:
 
 
 __all__ = [
-    "FinishAction",
-    "FinishExecutor",
-    "FinishObservation",
-    "FinishTool",
+    "SummarizerFinishAction",
+    "SummarizerFinishExecutor",
+    "SummarizerFinishObservation",
+    "SummarizerFinishTool",
     "get_finish_tool",
 ]

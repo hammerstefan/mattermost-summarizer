@@ -8,7 +8,7 @@ from openhands.sdk.tool.tool import ToolAnnotations, ToolDefinition
 from pydantic import Field
 
 
-class FinishAction(Action):
+class SummarizerFinishAction(Action):
     """Signal that summarization is complete with the final summary.
 
     This tool should be called when the agent has gathered all necessary
@@ -16,6 +16,9 @@ class FinishAction(Action):
     """
 
     tldr: str = Field(description="Bullet-point TL;DR of the conversation (3-5 key points)")
+    key_findings: list[str] = Field(
+        default_factory=list, description="Key findings or insights discovered in the conversation"
+    )
     narrative: str = Field(description="Chronological narrative of the conversation, noting who said what")
     action_items: list[str] = Field(
         default_factory=list, description="Decisions, todos, follow-ups, or assignments mentioned"
@@ -23,7 +26,7 @@ class FinishAction(Action):
     participants: list[str] = Field(default_factory=list, description="People who contributed to the thread")
 
 
-class FinishObservation(Observation):
+class SummarizerFinishObservation(Observation):
     """Result of the finish action."""
 
     success: bool = True
@@ -34,43 +37,46 @@ class FinishObservation(Observation):
         return [TextContent(text="Summary complete. Thank you!")]
 
 
-class FinishExecutor(ToolExecutor[FinishAction, FinishObservation]):
+class SummarizerFinishExecutor(ToolExecutor[SummarizerFinishAction, SummarizerFinishObservation]):
     """Executor for the finish tool.
 
     This is a terminal action - the real work happens in summarizer.py
-    which extracts the FinishAction from conversation events.
+    which extracts the SummarizerFinishAction from conversation events.
     """
 
-    def __call__(self, action: FinishAction, conversation: object | None = None) -> FinishObservation:
-        return FinishObservation(success=True, summary_provided=True)
+    def __call__(
+        self, action: SummarizerFinishAction, conversation: object | None = None
+    ) -> SummarizerFinishObservation:
+        return SummarizerFinishObservation(success=True, summary_provided=True)
 
 
-class FinishTool(ToolDefinition[FinishAction, FinishObservation]):
+class SummarizerFinishTool(ToolDefinition[SummarizerFinishAction, SummarizerFinishObservation]):
     """Tool for signaling the completion of a summarization task."""
 
     @classmethod
-    def create(cls, conv_state: object | None = None, **kwargs: object) -> Sequence["FinishTool"]:
-        """Create FinishTool instance.
+    def create(cls, conv_state: object | None = None, **kwargs: object) -> Sequence["SummarizerFinishTool"]:
+        """Create SummarizerFinishTool instance.
 
         Args:
             conv_state: Optional conversation state (not used by this tool)
             **kwargs: Additional parameters (none supported)
 
         Returns:
-            A sequence containing a single FinishTool instance
+            A sequence containing a single SummarizerFinishTool instance
         """
         return [
             cls(
                 description=(
                     "Call this tool when you have completed the summarization. "
                     "This tool accepts the final summary in structured form: "
-                    "TL;DR (3-5 bullet points), narrative (chronological story), "
+                    "TL;DR (3-5 bullet points), key findings (insights/discoveries), "
+                    "narrative (chronological story), "
                     "action items (decisions/follow-ups), and participants list. "
                     "Always provide substantive content for all fields."
                 ),
-                action_type=FinishAction,
-                observation_type=FinishObservation,
-                executor=FinishExecutor(),
+                action_type=SummarizerFinishAction,
+                observation_type=SummarizerFinishObservation,
+                executor=SummarizerFinishExecutor(),
                 annotations=ToolAnnotations(
                     title="finish",
                     readOnlyHint=True,
@@ -82,4 +88,4 @@ class FinishTool(ToolDefinition[FinishAction, FinishObservation]):
         ]
 
 
-__all__ = ["FinishAction", "FinishObservation", "FinishExecutor", "FinishTool"]
+__all__ = ["SummarizerFinishAction", "SummarizerFinishObservation", "SummarizerFinishExecutor", "SummarizerFinishTool"]

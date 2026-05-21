@@ -4,10 +4,10 @@
 class TestFinishTool:
     def test_finish_observation_to_llm_content(self) -> None:
         from mattermost_summarizer.tools.finish.definition import (
-            FinishObservation,
+            SummarizerFinishObservation,
         )
 
-        obs = FinishObservation(success=True, summary_provided=True)
+        obs = SummarizerFinishObservation(success=True, summary_provided=True)
         content = obs.to_llm_content
         assert len(content) == 1
         assert "Summary complete" in content[0].text

@@ -15,7 +15,7 @@ from mattermost_summarizer.exceptions import (
 )
 from mattermost_summarizer.models import SummaryMeta, SummaryResult
 from mattermost_summarizer.tools import build_mattermost_tools
-from mattermost_summarizer.tools.finish import FinishAction
+from mattermost_summarizer.tools.finish import SummarizerFinishAction
 from mattermost_summarizer.utils import parse_permalink
 
 
@@ -106,7 +106,7 @@ class MattermostSummarizer:
             message: str = (
                 f"Summarize this Mattermost thread: {permalink_url}\nThe post ID is: {post_id}\n\n{SYSTEM_PROMPT}"
             )
-            conversation.send_message(message)
+            conversation.send_message(message)  # type: ignore[arg-type]
 
             conversation.run()
 
@@ -133,6 +133,7 @@ class MattermostSummarizer:
 
                 return SummaryResult(
                     tldr=finish_action.tldr,
+                    key_findings=finish_action.key_findings,
                     narrative=finish_action.narrative,
                     action_items=finish_action.action_items,
                     participants=finish_action.participants,
@@ -147,8 +148,8 @@ class MattermostSummarizer:
                 conversation.close()
 
 
-def _extract_finish_action(conversation: LocalConversation) -> FinishAction | None:
-    """Scan conversation events for a FinishAction."""
+def _extract_finish_action(conversation: LocalConversation) -> SummarizerFinishAction | None:
+    """Scan conversation events for a SummarizerFinishAction."""
     if not hasattr(conversation, "state") or not conversation.state:
         return None
 
@@ -156,7 +157,7 @@ def _extract_finish_action(conversation: LocalConversation) -> FinishAction | No
 
     for event in reversed(events):
         if hasattr(event, "action") and event.action is not None:
-            action: FinishAction = event.action
+            action: SummarizerFinishAction = event.action
             if hasattr(action, "tldr") and hasattr(action, "narrative"):
                 return action
 
@@ -166,7 +167,7 @@ def _extract_finish_action(conversation: LocalConversation) -> FinishAction | No
                 if obs.summary_provided:
                     for prev_event in reversed(events):
                         if hasattr(prev_event, "action") and prev_event.action is not None:
-                            prev_action: FinishAction = prev_event.action
+                            prev_action: SummarizerFinishAction = prev_event.action
                             if hasattr(prev_action, "tldr"):
                                 return prev_action
 

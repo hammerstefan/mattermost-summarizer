@@ -13,11 +13,16 @@ When given a Mattermost permalink:
 2. Fetch channel context if the thread is unclear without it
 3. Produce a summary with:
    - TL;DR: 3-5 bullet points capturing the key outcomes
+   - Key Findings: Important insights, discoveries, or noteworthy points from the discussion
    - Narrative: Chronological walkthrough of the conversation, noting who said
      what and how the discussion evolved
    - Action items: Any decisions, follow-ups, or assignments mentioned
    - Participants: List of people who contributed
 4. Call the finish tool with your summary
+
+IMPORTANT: After calling the finish tool, do NOT output any additional text.
+The finish tool call IS your final output. Do not write markdown, summaries,
+or any other text after calling it.
 
 Be concise but thorough. Focus on substance, not procedural messages
 ("thanks!", "agreed", etc.).

@@ -29,7 +29,7 @@ class FetchThreadObservation(Observation):
     root_post: dict[str, object]
     replies: list[dict[str, object]]
     channel_id: str
-    channel_name: str | None
+    channel_name: str | None = None
     total_replies: int
     error: str | None = None
 
