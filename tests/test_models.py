@@ -1,6 +1,9 @@
 """Tests for data models."""
 
 from datetime import datetime
+from io import StringIO
+
+from rich.console import Console
 
 from mattermost_summarizer.models import (
     Channel,
@@ -189,6 +192,109 @@ class TestSummaryResult:
         output = str(result)
         assert "cache hit" not in output
         assert "reasoning" not in output
+
+    def test_render_rich_output(self) -> None:
+        result = SummaryResult(
+            tldr="Short summary text",
+            key_findings=["Finding one", "Finding two"],
+            narrative="This is the narrative.",
+            action_items=["Do this", "Do that"],
+            participants=["Alice", "Bob", "Carol"],
+            metadata=SummaryMeta(
+                thread_length=10,
+                cost=0.05,
+                model_used="openai/gpt-4o",
+                duration_seconds=3.5,
+                input_tokens=5000,
+                output_tokens=800,
+                cache_read_tokens=1000,
+                cache_write_tokens=2000,
+                reasoning_tokens=150,
+            ),
+        )
+        buffer = StringIO()
+        console = Console(file=buffer, force_terminal=True)
+        result.render_rich(console)
+        output = buffer.getvalue()
+        assert "TL;DR" in output
+        assert "Short summary text" in output
+        assert "KEY FINDINGS" in output
+        assert "Finding one" in output
+        assert "Finding two" in output
+        assert "NARRATIVE" in output
+        assert "ACTION ITEMS" in output
+        assert "Do this" in output
+        assert "Do that" in output
+        assert "PARTICIPANTS" in output
+        assert "Alice" in output
+        assert "Bob" in output
+        assert "Carol" in output
+        assert "Tokens:" in output
+        assert "5.00K" in output
+        assert "0.05" in output
+
+    def test_render_rich_omits_empty_sections(self) -> None:
+        result = SummaryResult(
+            tldr="Summary without optional sections",
+            narrative="A plain narrative.",
+            metadata=SummaryMeta(
+                thread_length=2,
+                cost=0.01,
+                model_used="test-model",
+                duration_seconds=1.0,
+            ),
+        )
+        buffer = StringIO()
+        console = Console(file=buffer, force_terminal=True)
+        result.render_rich(console)
+        output = buffer.getvalue()
+        assert "KEY FINDINGS" not in output
+        assert "ACTION ITEMS" not in output
+        assert "PARTICIPANTS" not in output
+
+    def test_str_is_unchanged_after_rich(self) -> None:
+        result = SummaryResult(
+            tldr="Key point",
+            narrative="Story goes...",
+            action_items=["Action 1"],
+            participants=["Alice"],
+            metadata=SummaryMeta(
+                thread_length=5,
+                cost=0.02,
+                model_used="test-model",
+                duration_seconds=1.0,
+            ),
+        )
+        console = Console(file=StringIO(), force_terminal=True)
+        result.render_rich(console)
+        plain_output = str(result)
+        assert "TL;DR" in plain_output
+        assert "NARRATIVE" in plain_output
+        assert "ACTION ITEMS" in plain_output
+        assert "PARTICIPANTS" in plain_output
+        assert "Alice" in plain_output
+
+    def test_render_rich_inline_bold(self) -> None:
+        result = SummaryResult(
+            tldr="**Bug**: something broke",
+            key_findings=["**Performance**: 2x slowdown"],
+            narrative="Plain narrative.",
+            action_items=["**alice**: fix the thing"],
+            metadata=SummaryMeta(
+                thread_length=1,
+                cost=0.0,
+                model_used="m",
+                duration_seconds=0.0,
+            ),
+        )
+        buffer = StringIO()
+        console = Console(file=buffer, force_terminal=True)
+        result.render_rich(console)
+        output = buffer.getvalue()
+        assert "**" not in output
+        assert "Bug" in output
+        assert "Performance" in output
+        assert "alice" in output
 
 
 class TestPostThread:

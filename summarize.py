@@ -64,6 +64,11 @@ def main() -> int:
 
     if args.output == "json":
         print(result.model_dump_json(indent=2))
+    elif sys.stdout.isatty():
+        from rich.console import Console
+
+        console = Console()
+        result.render_rich(console)
     else:
         print(str(result))
 

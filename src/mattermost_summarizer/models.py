@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
+from rich.console import Console
+from rich.text import Text
+
+
+def _inline_bold(s: str) -> Text:
+    """Convert **...** markdown bold to a rich Text with bold spans."""
+    markup = re.sub(r"\*\*(.+?)\*\*", r"[bold]\1[/bold]", s)
+    return Text.from_markup(markup)
 
 
 class PostData(BaseModel):
@@ -95,6 +104,64 @@ class SummaryResult(BaseModel):
     action_items: list[str] = []
     participants: list[str] = []
     metadata: SummaryMeta = SummaryMeta()
+
+    def render_rich(self, console: Console) -> None:
+        """Render the summary using rich typography styling.
+
+        Args:
+            console: A rich Console instance to write to.
+        """
+        from rich.markdown import Markdown
+
+        tldr_header = Text("TL;DR", style="bold")
+        console.print(tldr_header)
+        console.print(_inline_bold(self.tldr))
+
+        if self.key_findings:
+            console.print()
+            console.print(Text("KEY FINDINGS", style="bold"))
+            for finding in self.key_findings:
+                t = _inline_bold(f"  ● {finding}")
+                t.stylize("cyan")
+                console.print(t)
+
+        console.print()
+        console.print(Text("NARRATIVE", style="bold"))
+        md = Markdown(self.narrative, code_theme="none")
+        console.print(md)
+
+        if self.action_items:
+            console.print()
+            console.print(Text("ACTION ITEMS", style="bold"))
+            for item in self.action_items:
+                t = _inline_bold(f"  □ {item}")
+                t.stylize("magenta")
+                console.print(t)
+
+        if self.participants:
+            console.print()
+            console.print(Text("PARTICIPANTS", style="bold"))
+            console.print(", ".join(self.participants))
+
+        console.print()
+        console.print(Text("─" * 60, style="dim"))
+
+        tokens_parts = [f"↑ input {_format_token_count(self.metadata.input_tokens)}"]
+
+        cache_read = self.metadata.cache_read_tokens
+        input_with_cache = self.metadata.input_tokens + cache_read
+        if input_with_cache > 0 and cache_read > 0:
+            cache_hit_pct = (cache_read / input_with_cache) * 100
+            tokens_parts.append(f"cache hit {cache_hit_pct:.2f}%")
+
+        if self.metadata.reasoning_tokens > 0:
+            tokens_parts.append(f"reasoning {self.metadata.reasoning_tokens}")
+
+        tokens_parts.append(f"↓ output {_format_token_count(self.metadata.output_tokens)}")
+        tokens_parts.append(f"$ {self.metadata.cost:.2f}")
+
+        meta_line = "  Tokens: " + " • ".join(tokens_parts)
+        console.print(Text(meta_line, style="dim"))
 
     def __str__(self) -> str:
         """Pretty format the summary result."""
