@@ -17,6 +17,7 @@ from mattermost_summarizer.models import SummaryMeta, SummaryResult
 from mattermost_summarizer.tools import build_mattermost_tools
 from mattermost_summarizer.tools.finish import SummarizerFinishAction
 from mattermost_summarizer.utils import parse_permalink
+from mattermost_summarizer.visualizer import FileConversationVisualizer
 
 
 class MattermostSummarizer:
@@ -85,6 +86,8 @@ class MattermostSummarizer:
         except ValueError as e:
             raise PermalinkError(str(e)) from e
 
+        visualizer = FileConversationVisualizer("agent-trace.log")
+
         with (
             MattermostClient(
                 base_url=str(self.config.mattermost_url),
@@ -101,7 +104,7 @@ class MattermostSummarizer:
                 tools=tools,
             )
 
-            conversation = LocalConversation(agent=agent, workspace=tmpdir)
+            conversation = LocalConversation(agent=agent, workspace=tmpdir, visualizer=visualizer)
 
             message: str = (
                 f"Summarize this Mattermost thread: {permalink_url}\nThe post ID is: {post_id}\n\n{SYSTEM_PROMPT}"
@@ -170,6 +173,7 @@ class MattermostSummarizer:
                 )
             finally:
                 conversation.close()
+                visualizer.close()
 
 
 def _extract_finish_action(conversation: LocalConversation) -> SummarizerFinishAction | None:

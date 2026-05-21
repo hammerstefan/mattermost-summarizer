@@ -2,6 +2,7 @@
 
 import logging
 import re
+from typing import cast
 from urllib.parse import urlparse
 
 from mattermost_summarizer.exceptions import PermalinkError
@@ -48,7 +49,7 @@ def cleanup_external_loggers() -> None:
         logger = logging.getLogger(logger_name)
         for handler in list(logger.handlers):
             if isinstance(handler, logging.StreamHandler):
-                logger.removeHandler(handler)  # type: ignore[reportUnknownArgumentType]
+                logger.removeHandler(cast(logging.Handler, handler))
         if not logger.handlers:
             root = logging.getLogger()
             if root.handlers:
