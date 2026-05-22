@@ -11,6 +11,7 @@ license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "openhands-sdk>=1.0.0",
+    "openhands-tools>=1.0.0",
     "httpx>=0.27.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
@@ -44,6 +45,18 @@ python_version = "3.12"
 strict = true
 package_root = "src"
 disable_error_code = ["unused-ignore"]
+
+[[tool.mypy.overrides]]
+module = "openhands.tools.delegate.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "openhands.tools.fetch_launchpad_bug.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "openhands.tools.fetch_github_issue.*"
+ignore_missing_imports = true
 
 [tool.pyright]
 pythonVersion = "3.12"

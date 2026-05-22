@@ -21,7 +21,7 @@ def _format_token_count(value: int) -> str:
     return str(value)
 
 
-def _inline_bold(s: str) -> Text:
+def inline_bold(s: str) -> Text:
     """Convert **...** markdown bold to a rich Text with bold spans."""
     markup = re.sub(r"\*\*(.+?)\*\*", r"[bold]\1[/bold]", s)
     return Text.from_markup(markup)

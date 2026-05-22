@@ -16,7 +16,9 @@ from mattermost_summarizer.levels.base import (
     SummarizerFinishObservation,
     SummarizerFinishToolBase,
     SummaryResultBase,
-    _inline_bold,
+)
+from mattermost_summarizer.levels.base import (
+    inline_bold as _inline_bold,
 )
 
 USER_MESSAGE_ADDENDUM = """Level: BRIEF (minimal)

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from openhands.sdk import LocalConversation
 
-from mattermost_summarizer.agent import build_summarizer_agent_with_github, build_user_message
+from mattermost_summarizer.agent import build_orchestrator_agent
 from mattermost_summarizer.client import MattermostClient
 from mattermost_summarizer.config import MattermostSummarizerConfig
 from mattermost_summarizer.exceptions import (
@@ -16,9 +16,6 @@ from mattermost_summarizer.exceptions import (
     PermalinkError,
 )
 from mattermost_summarizer.levels import (
-    BRIEF_ADDENDUM,
-    DETAILED_ADDENDUM,
-    NORMAL_ADDENDUM,
     AnySummaryResult,
     BriefSummaryResult,
     DetailedSummaryResult,
@@ -27,6 +24,7 @@ from mattermost_summarizer.levels import (
     SummaryLevel,
     SummaryMeta,
 )
+from mattermost_summarizer.subagents import register_subagents
 from mattermost_summarizer.utils import parse_permalink
 from mattermost_summarizer.visualizer import FileConversationVisualizer
 
@@ -103,14 +101,7 @@ class MattermostSummarizer:
         except ValueError as e:
             raise PermalinkError(str(e)) from e
 
-        if level == SummaryLevel.BRIEF:
-            addendum = BRIEF_ADDENDUM
-        elif level == SummaryLevel.DETAILED:
-            addendum = DETAILED_ADDENDUM
-        else:
-            addendum = NORMAL_ADDENDUM
-
-        message = build_user_message(permalink_url, post_id, level, addendum)
+        message = f"Summarize this Mattermost thread: {permalink_url}\nThe post ID is: {post_id}"
 
         visualizer = FileConversationVisualizer("agent-trace.log")
 
@@ -121,12 +112,12 @@ class MattermostSummarizer:
             ) as client,
             tempfile.TemporaryDirectory() as tmpdir,
         ):
-            agent = build_summarizer_agent_with_github(
+            register_subagents(client)
+
+            agent = build_orchestrator_agent(
                 llm_model=self.config.llm_model,
                 llm_api_key=self.config.llm_api_key.get_secret_value(),
                 llm_base_url=self.config.llm_base_url,
-                client=client,
-                github_token=self.config.github_token,
                 level=level,
             )
 

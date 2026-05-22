@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import litellm
-from openhands.sdk import LLM, Agent, Tool
+from openhands.sdk import LLM, Agent, AgentContext, Tool
 from pydantic import SecretStr
 
 if TYPE_CHECKING:
@@ -51,6 +51,61 @@ Be concise but thorough. Focus on substance, not procedural messages
 IMPORTANT: Always fetch the thread first using the FetchThread tool before
 attempting to summarize. The thread data will include user information. Only call
 GetUser if you need additional details about a specific user."""
+
+
+ORCHESTRATOR_PROMPT = """You are the orchestrator for a Mattermost conversation summarization system.
+
+Your job is to coordinate specialized sub-agents to gather context and produce a summary.
+
+ Coordination Flow:
+ 1. Parse the permalink URL from the user message
+ 2. Delegate to the thread_fetcher sub-agent to fetch the root thread
+ 3. Receive the fetched thread content and scan it for references:
+    - Mattermost permalinks (thread URLs)
+    - Launchpad bug URLs (bugs.launchpad.net/...)
+    - GitHub issue/PR URLs (github.com/...)
+    - File attachment references
+ 4. Decide which references are relevant to follow based on the thread context
+ 5. Delegate to appropriate sub-agents for relevant references:
+    - thread_fetcher: for Mattermost thread permalinks
+    - bug_researcher: for Launchpad bug URLs
+    - github_researcher: for GitHub issue/PR URLs
+    - file_fetcher: for Mattermost file attachments
+ 6. Repeat steps 3-5 up to the maximum reference depth (default: 3)
+ 7. Synthesize all gathered context into a coherent summary
+ 8. Call the finish tool with the structured summary
+
+ Important constraints:
+ - Do NOT fetch data directly - always delegate to the appropriate sub-agent
+ - Track which URLs you have already followed to avoid cycles
+ - Only follow references that are relevant to understanding the thread
+ - When in doubt, prefer following fewer references rather than more
+ - Always delegate the root thread to thread_fetcher first
+
+ Reference types and their sub-agents:
+ - Mattermost thread URLs (chat.example.com/team/pl/...) → thread_fetcher
+ - Launchpad bugs (bugs.launchpad.net/...) → bug_researcher
+ - GitHub issues/PRs (github.com/.../issues/..., github.com/.../pull/...) → github_researcher
+ - Mattermost file attachments → file_fetcher
+
+ To delegate, you MUST use TWO steps:
+
+  Step 1 - SPAWN: Create sub-agents with specific IDs
+    delegate(
+      command="spawn",
+      ids=["my_agent_id"],
+      agent_types=["thread_fetcher"]
+    )
+
+  Step 2 - DELEGATE: Send tasks to already-spawned agents
+    delegate(
+      command="delegate",
+      tasks={"my_agent_id": "Your task description here"}
+    )
+
+  Example - Complete workflow to fetch a thread:
+    1. delegate(command="spawn", ids=["fetcher_1"], agent_types=["thread_fetcher"])
+    2. delegate(command="delegate", tasks={"fetcher_1": "Fetch Mattermost thread from permalink: https://chat.example.com/team/pl/abc123"})"""
 
 
 def supports_json_mode(model: str) -> bool:
@@ -180,10 +235,90 @@ def build_summarizer_agent_with_github(
     return agent
 
 
+def build_orchestrator_agent(
+    llm_model: str,
+    llm_api_key: str,
+    llm_base_url: str | None,
+    level: SummaryLevel,
+) -> Agent:
+    """Build an orchestrator agent that delegates to sub-agents.
+
+    Args:
+        llm_model: LLM model name (LiteLLM format: provider/model-name)
+        llm_api_key: API key for the LLM
+        llm_base_url: Base URL for the LLM API (None = provider default)
+        level: Summarization level (determines which finish tool to use)
+
+    Returns:
+        Configured Agent instance with DelegateTool and finish tool
+    """
+    import openhands.sdk as oh_sdk
+
+    from mattermost_summarizer.levels import (
+        BriefFinishTool,
+        DetailedFinishTool,
+        NormalFinishTool,
+        SummaryLevel,
+    )
+    from mattermost_summarizer.levels.base import SummarizerFinishToolBase
+    from mattermost_summarizer.subagents.delegate_tool import DelegateTool
+
+    extra_body: dict[str, object] | None = None
+    enable_json_mode = supports_json_mode(llm_model)
+    enable_json_mode = False
+    if enable_json_mode:
+        extra_body = {"response_format": {"type": "json_object"}}
+
+    llm_kwargs: dict[str, object] = {
+        "model": llm_model,
+        "api_key": SecretStr(llm_api_key),
+    }
+    if llm_base_url:
+        llm_kwargs["base_url"] = llm_base_url
+    if extra_body:
+        llm_kwargs["litellm_extra_body"] = extra_body
+
+    if llm_model.startswith("github_copilot/"):
+        llm_kwargs["extra_headers"] = {
+            "editor-version": "vscode/1.85.1",
+            "Copilot-Integration-Id": "vscode-chat",
+        }
+
+    llm = LLM(**llm_kwargs)  # type: ignore[arg-type]
+
+    delegate_tool_def = DelegateTool.create()[0]
+    oh_sdk.register_tool("delegate", delegate_tool_def)  # type: ignore[arg-type]
+
+    if level == SummaryLevel.BRIEF:
+        finish_tool_def: SummarizerFinishToolBase = BriefFinishTool.create()[0]
+    elif level == SummaryLevel.DETAILED:
+        finish_tool_def = DetailedFinishTool.create()[0]
+    else:
+        finish_tool_def = NormalFinishTool.create()[0]
+
+    oh_sdk.register_tool("finish", finish_tool_def)  # type: ignore[arg-type]
+
+    tools: list[Tool] = [
+        Tool(name="delegate", params={}),
+        Tool(name="finish", params={}),
+    ]
+
+    agent = Agent(
+        llm=llm,
+        tools=tools,
+        agent_context=AgentContext(system_message_suffix=ORCHESTRATOR_PROMPT),
+        include_default_tools=[],
+    )
+
+    return agent
+
+
 __all__ = [
     "build_summarizer_agent",
     "build_summarizer_agent_with_github",
+    "build_orchestrator_agent",
     "SYSTEM_PROMPT",
+    "ORCHESTRATOR_PROMPT",
     "supports_json_mode",
     "build_user_message",
 ]

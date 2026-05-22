@@ -1,32 +1,32 @@
 ## 1. Dependency and Skeleton
 
-- [ ] 1.1 Add `openhands-tools` to pyproject.toml dependencies
-- [ ] 1.2 Verify DelegateTool import from `openhands.tools.delegate`
-- [ ] 1.3 Create `src/mattermost_summarizer/subagents/` package
-- [ ] 1.4 Create `subagents/__init__.py` with package exports
-- [ ] 1.5 Create stub factory functions for all four sub-agents (returning agents with no tools)
-- [ ] 1.6 Register stub sub-agents via `register_agent()` in a setup function
-- [ ] 1.7 Verify sub-agent registration works at startup
-- [ ] 1.8 Verify delegation flow (spawn + delegate) works with stub agents
+- [x] 1.1 Add `openhands-tools` to pyproject.toml dependencies
+- [x] 1.2 Verify DelegateTool import from `openhands.tools.delegate`
+- [x] 1.3 Create `src/mattermost_summarizer/subagents/` package
+- [x] 1.4 Create `subagents/__init__.py` with package exports
+- [x] 1.5 Create stub factory functions for all four sub-agents (returning agents with no tools)
+- [x] 1.6 Register stub sub-agents via `register_agent()` in a setup function
+- [x] 1.7 Verify sub-agent registration works at startup
+- [x] 1.8 Verify delegation flow (spawn + delegate) works with stub agents
 
 ## 2. Sub-agent Implementation
 
-- [ ] 2.1 Implement `create_thread_fetcher(llm)` factory function with FetchThread, GetUser, FetchChannel tools
-- [ ] 2.2 Implement `create_bug_researcher(llm)` factory function with FetchLaunchpadBug tool
-- [ ] 2.3 Implement `create_github_researcher(llm)` factory function with FetchGitHubIssue tool
-- [ ] 2.4 Implement `create_file_fetcher(llm)` factory function with FetchFile tool
-- [ ] 2.5 Write focused system prompts for each sub-agent in their factory
-- [ ] 2.6 Update sub-agent registration to use real factory functions
-- [ ] 2.7 Verify single-level delegation works (thread_fetcher → orchestrator)
+- [x] 2.1 Implement `create_thread_fetcher(llm)` factory function with FetchThread, GetUser, FetchChannel tools
+- [x] 2.2 Implement `create_bug_researcher(llm)` factory function with FetchLaunchpadBug tool
+- [x] 2.3 Implement `create_github_researcher(llm)` factory function with FetchGitHubIssue tool
+- [x] 2.4 Implement `create_file_fetcher(llm)` factory function with FetchFile tool
+- [x] 2.5 Write focused system prompts for each sub-agent in their factory
+- [x] 2.6 Update sub-agent registration to use real factory functions
+- [x] 2.7 Verify single-level delegation works (thread_fetcher → orchestrator)
 
 ## 3. Orchestrator Implementation
 
-- [ ] 3.1 Create `build_orchestrator_agent()` in agent.py with DelegateTool and finish tool
-- [ ] 3.2 Move system prompt to `AgentContext.system_message_suffix`
-- [ ] 3.3 Implement orchestrator coordination loop in summarizer.py
-- [ ] 3.4 Wire orchestrator into `MattermostSummarizer.summarize()`
-- [ ] 3.5 Verify orchestrator delegates to thread_fetcher correctly
-- [ ] 3.6 Verify multi-level delegation works (orchestrator → sub-agents → results)
+- [x] 3.1 Create `build_orchestrator_agent()` in agent.py with DelegateTool and finish tool
+- [x] 3.2 Move system prompt to `AgentContext.system_message_suffix`
+- [x] 3.3 Implement orchestrator coordination loop in summarizer.py
+- [x] 3.4 Wire orchestrator into `MattermostSummarizer.summarize()`
+- [x] 3.5 Verify orchestrator delegates to thread_fetcher correctly
+- [x] 3.6 Verify multi-level delegation works (orchestrator → sub-agents → results)
 
 ## 4. Recursive Reference Following
 
