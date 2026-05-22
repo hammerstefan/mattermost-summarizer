@@ -1,13 +1,14 @@
 """Mattermost API client using httpx."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from mattermost_summarizer.exceptions import (
     AuthenticationError,
     ChannelNotFoundError,
+    FileNotFoundError,
     ThreadNotFoundError,
     UserNotFoundError,
 )
@@ -195,6 +196,94 @@ class MattermostClient:
             team_name=team_name,
             type=data.get("type", "O"),
         )
+
+    def get_channel_by_name(self, team_id: str, channel_name: str) -> Channel:
+        """Fetch a channel by name within a specific team.
+
+        Args:
+            team_id: The team ID
+            channel_name: The channel name (not display name)
+
+        Returns:
+            Channel with details
+
+        Raises:
+            ChannelNotFoundError: If channel doesn't exist (404)
+            AuthenticationError: If unauthorized (401)
+        """
+        response = self._http.get(f"/channels/name/{team_id}/{channel_name}")
+
+        if response.status_code == 401:
+            raise AuthenticationError("Mattermost API authentication failed. Check your token.")
+        if response.status_code == 404:
+            raise ChannelNotFoundError(f"Channel not found: {channel_name}")
+
+        response.raise_for_status()
+        return self._parse_channel(response.json())
+
+    def get_team_id_by_name(self, team_name: str) -> str | None:
+        """Look up a team ID by team name.
+
+        Args:
+            team_name: The team name
+
+        Returns:
+            Team ID if found, None otherwise
+        """
+        try:
+            response = self._http.get(f"/teams/name/{team_name}")
+            if response.is_success:
+                return cast(str | None, response.json().get("id"))
+        except Exception:
+            pass
+        return None
+
+    def _parse_channel(self, data: dict[str, object]) -> Channel:
+        """Parse raw channel data into a Channel model."""
+        team_name = None
+        if "team_name" in data:
+            team_name = data["team_name"]
+        elif "team_id" in data:
+            try:
+                team_response = self._http.get(f"/teams/{data['team_id']}")
+                if team_response.is_success:
+                    team_name = team_response.json().get("name")
+            except Exception:
+                pass
+
+        return Channel(
+            id=cast(str, data["id"]),
+            name=cast(str, data.get("name", "")),
+            display_name=cast(str, data.get("display_name", "")),
+            purpose=cast(str | None, data.get("purpose")),
+            header=cast(str | None, data.get("header")),
+            team_name=cast(str | None, team_name),
+            type=cast(str, data.get("type", "O")),
+        )
+
+    def get_file(self, file_id: str) -> tuple[bytes, str]:
+        """Fetch a file attachment by ID.
+
+        Args:
+            file_id: The file ID
+
+        Returns:
+            Tuple of (file content bytes, content_type)
+
+        Raises:
+            FileNotFoundError: If file doesn't exist (404)
+            AuthenticationError: If unauthorized (401)
+        """
+        response = self._http.get(f"/files/{file_id}")
+
+        if response.status_code == 401:
+            raise AuthenticationError("Mattermost API authentication failed. Check your token.")
+        if response.status_code == 404:
+            raise FileNotFoundError(f"File not found: {file_id}")
+
+        response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "application/octet-stream")
+        return response.content, content_type
 
     def _parse_post(self, data: dict[str, Any]) -> PostData:
         """Parse a raw post dict into a PostData model."""

@@ -26,12 +26,16 @@ class MattermostSummarizerConfig(BaseSettings):
         api_key = "your-llm-api-key"
         base_url = "https://api.openai.com/v1"  # optional
 
+        [github]
+        token = "ghp_..."  # optional; raises GitHub API rate limit
+
     Example env vars:
         MM_MATTERMOST_URL=https://chat.canonical.com
         MM_MATTERMOST_TOKEN=your-token
         MM_LLM_MODEL=openai/gpt-4o
         MM_LLM_API_KEY=your-key
         MM_LLM_BASE_URL=https://api.openai.com/v1
+        MM_GITHUB_TOKEN=ghp_...  # optional
     """
 
     model_config = SettingsConfigDict(
@@ -50,6 +54,10 @@ class MattermostSummarizerConfig(BaseSettings):
     llm_base_url: str | None = Field(
         default=None,
         description="LLM API base URL (None = provider default)",
+    )
+    github_token: SecretStr | None = Field(
+        default=None,
+        description="GitHub personal access token (optional; raises rate limit for FetchGitHubIssue)",
     )
 
     @classmethod
@@ -95,6 +103,11 @@ class MattermostSummarizerConfig(BaseSettings):
                 data["llm_api_key"] = llm["api_key"]
             if "base_url" in llm:
                 data["llm_base_url"] = llm["base_url"]
+
+        if "github" in toml_data:
+            github: dict[str, Any] = dict(toml_data["github"])  # pyright: ignore[reportArgumentType]  # type: ignore[misc]
+            if "token" in github:
+                data["github_token"] = github["token"]
 
         return cls(**data)
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from openhands.sdk import LocalConversation
 
-from mattermost_summarizer.agent import SYSTEM_PROMPT, build_summarizer_agent
+from mattermost_summarizer.agent import SYSTEM_PROMPT, build_summarizer_agent_with_github
 from mattermost_summarizer.client import MattermostClient
 from mattermost_summarizer.config import MattermostSummarizerConfig
 from mattermost_summarizer.exceptions import (
@@ -14,7 +14,6 @@ from mattermost_summarizer.exceptions import (
     PermalinkError,
 )
 from mattermost_summarizer.models import SummaryMeta, SummaryResult
-from mattermost_summarizer.tools import build_mattermost_tools
 from mattermost_summarizer.tools.finish import SummarizerFinishAction
 from mattermost_summarizer.utils import parse_permalink
 from mattermost_summarizer.visualizer import FileConversationVisualizer
@@ -95,13 +94,12 @@ class MattermostSummarizer:
             ) as client,
             tempfile.TemporaryDirectory() as tmpdir,
         ):
-            tools = build_mattermost_tools(client)
-
-            agent = build_summarizer_agent(
+            agent = build_summarizer_agent_with_github(
                 llm_model=self.config.llm_model,
                 llm_api_key=self.config.llm_api_key.get_secret_value(),
                 llm_base_url=self.config.llm_base_url,
-                tools=tools,
+                client=client,
+                github_token=self.config.github_token,
             )
 
             conversation = LocalConversation(agent=agent, workspace=tmpdir, visualizer=visualizer)

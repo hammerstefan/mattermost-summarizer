@@ -173,3 +173,60 @@ class TestMattermostClientGetChannel:
 
         with pytest.raises(ChannelNotFoundError, match="Channel not found"):
             client.get_channel("nonexistent")
+
+
+class TestMattermostClientGetChannelByName:
+    def test_get_channel_by_name_success(self, client: MattermostClient, httpserver: HTTPServer) -> None:
+        channel_response = {
+            "id": "channel123",
+            "name": "cloud-init",
+            "display_name": "cloud-init",
+            "purpose": "cloud-init discussion",
+            "header": "Channel for cloud-init",
+            "type": "O",
+        }
+        httpserver.expect_oneshot_request("/api/v4/teams/name/ubuntu", method="GET").respond_with_json(
+            {"id": "team1", "name": "ubuntu"}
+        )
+        httpserver.expect_oneshot_request("/api/v4/channels/name/team1/cloud-init", method="GET").respond_with_json(
+            channel_response
+        )
+
+        channel = client.get_channel_by_name("team1", "cloud-init")
+
+        assert channel.id == "channel123"
+        assert channel.name == "cloud-init"
+        assert channel.display_name == "cloud-init"
+        assert channel.purpose == "cloud-init discussion"
+
+    def test_get_channel_by_name_with_team(self, client: MattermostClient, httpserver: HTTPServer) -> None:
+        channel_response = {
+            "id": "channel123",
+            "name": "cloud-init",
+            "display_name": "cloud-init",
+            "type": "O",
+            "team_id": "team1",
+            "team_name": "ubuntu",
+        }
+        httpserver.expect_oneshot_request("/api/v4/teams/name/ubuntu", method="GET").respond_with_json(
+            {"id": "team1", "name": "ubuntu"}
+        )
+        httpserver.expect_oneshot_request("/api/v4/channels/name/team1/cloud-init", method="GET").respond_with_json(
+            channel_response
+        )
+
+        channel = client.get_channel_by_name("team1", "cloud-init")
+
+        assert channel.id == "channel123"
+        assert channel.team_name == "ubuntu"
+
+    def test_get_channel_by_name_not_found(self, client: MattermostClient, httpserver: HTTPServer) -> None:
+        httpserver.expect_oneshot_request("/api/v4/teams/name/nonexistent", method="GET").respond_with_json(
+            {"id": "team1", "name": "nonexistent"}
+        )
+        httpserver.expect_oneshot_request("/api/v4/channels/name/team1/nonexistent", method="GET").respond_with_json(
+            {"message": "Not found"}, status=404
+        )
+
+        with pytest.raises(ChannelNotFoundError, match="Channel not found"):
+            client.get_channel_by_name("team1", "nonexistent")

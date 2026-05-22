@@ -25,6 +25,10 @@ class ChannelNotFoundError(NotFoundError):
     """Raised when a requested channel is not found (404)."""
 
 
+class FileNotFoundError(NotFoundError):
+    """Raised when a requested file is not found (404)."""
+
+
 class AgentStuckError(Exception):
     """Raised when the OpenHands agent gets stuck and cannot complete."""
 
