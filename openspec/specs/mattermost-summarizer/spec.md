@@ -38,8 +38,10 @@ The system SHALL use the OpenHands Software Agent SDK to perform summarization.
 ### REQ-006: Stop Condition
 The system SHALL use the finish tool as the primary stop condition.
 - FinishAction SHALL accept: tldr, narrative, action_items, participants
-- StuckDetector SHALL be enabled as a safety net
-- If stuck is detected, the system SHALL return a partial result or raise an error
+- The system SHALL register an event callback on `LocalConversation` that calls `conversation.pause()` immediately upon observing the first `SummarizerFinishAction` event, stopping the run loop after exactly one finish call with no additional LLM iterations
+- The summary SHALL be extracted from the conversation event log after the run exits (whether status is `FINISHED` or `PAUSED`)
+- StuckDetector SHALL be enabled as a secondary safety net for cases where the finish tool is never called
+- If the finish tool was never called and stuck is detected, the system SHALL raise `AgentStuckError`
 
 ### REQ-007: TL;DR Output
 The system SHALL produce a bullet-point TL;DR (3-5 points) capturing key outcomes and decisions.

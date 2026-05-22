@@ -102,7 +102,26 @@ class MattermostSummarizer:
                 github_token=self.config.github_token,
             )
 
-            conversation = LocalConversation(agent=agent, workspace=tmpdir, visualizer=visualizer)
+            conv_ref: list[LocalConversation | None] = [None]
+            finish_seen_ref = [False]
+
+            def _on_finish_callback(event: object) -> None:
+                if (
+                    not finish_seen_ref[0]
+                    and hasattr(event, "action")
+                    and isinstance(getattr(event, "action", None), SummarizerFinishAction)
+                    and conv_ref[0] is not None
+                ):
+                    finish_seen_ref[0] = True
+                    conv_ref[0].pause()
+
+            conversation = LocalConversation(
+                agent=agent,
+                workspace=tmpdir,
+                visualizer=visualizer,
+                callbacks=[_on_finish_callback],
+            )
+            conv_ref[0] = conversation
 
             message: str = (
                 f"Summarize this Mattermost thread: {permalink_url}\nThe post ID is: {post_id}\n\n{SYSTEM_PROMPT}"
