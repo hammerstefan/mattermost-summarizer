@@ -53,6 +53,8 @@ class SummarizerFinishExecutor(ToolExecutor[SummarizerFinishAction, SummarizerFi
 class SummarizerFinishTool(ToolDefinition[SummarizerFinishAction, SummarizerFinishObservation]):
     """Tool for signaling the completion of a summarization task."""
 
+    name = "finish"  # Override so the SDK recognizes this as terminal
+
     @classmethod
     def create(cls, conv_state: object | None = None, **kwargs: object) -> Sequence["SummarizerFinishTool"]:
         """Create SummarizerFinishTool instance.

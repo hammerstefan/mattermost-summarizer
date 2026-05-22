@@ -30,7 +30,7 @@ When given a Mattermost permalink:
 7. Call the finish tool with your summary
 
 Example finish call:
-  summarizer_finish(
+  finish(
     tldr="- First key point\\n- Second key point\\n- Third key point",
     key_findings=["Finding one", "Finding two"],
     narrative="The discussion started when...",
