@@ -137,7 +137,7 @@ class MattermostSummarizer:
                 if (
                     not finish_seen_ref[0]
                     and hasattr(event, "action")
-                    and isinstance(getattr(event, "action", None), SummarizerFinishAction)
+                    and isinstance(getattr(event, "action", None), SummarizerFinishActionBase)
                     and conv_ref[0] is not None
                 ):
                     finish_seen_ref[0] = True
