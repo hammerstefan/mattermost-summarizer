@@ -23,7 +23,27 @@ api_key = "your-llm-api-key"
 base_url = "https://api.openai.com/v1"  # optional
 ```
 
-Or use environment variables with `MM_` prefix:
+### Using GitHub Copilot
+
+If you have a GitHub Copilot subscription, you can use it instead of a separate LLM provider. LiteLLM has native support via the `github_copilot/` provider prefix:
+
+```toml
+[mattermost]
+url = "https://chat.canonical.com"
+token = "your-mattermost-token"
+
+[llm]
+model   = "github_copilot/claude-haiku-4.5"
+api_key = "ghp_your_github_personal_access_token"
+```
+
+Your GitHub PAT needs the `copilot` scope. No `base_url` is required — LiteLLM routes automatically.
+
+See [docs/gh-copilot.md](docs/gh-copilot.md) for more details.
+
+### Environment Variables
+
+You can use environment variables with `MM_` prefix instead of a config file:
 
 ```bash
 export MM_MATTERMOST_URL=https://chat.canonical.com
