@@ -51,3 +51,8 @@ include = ["src"]
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
 stubPath = ""
+
+[dependency-groups]
+dev = [
+    "pytest-xdist>=3.8.0",
+]
