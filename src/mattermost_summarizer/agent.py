@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     from mattermost_summarizer.client import MattermostClient
     from mattermost_summarizer.levels import SummaryLevel
+    from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
 
 SYSTEM_PROMPT = """You are a Mattermost conversation summarizer. Your job is to read
 conversation threads and produce structured summaries.
@@ -117,40 +118,36 @@ Your job is to coordinate specialized sub-agents to gather context and produce a
     2. delegate(command="delegate", tasks={"fetcher_1": "Fetch Mattermost thread from permalink: https://chat.example.com/team/pl/abc123"})
 
   Reference Tracking Tool (track_references):
-  Use the track_references tool to programmatically track URLs and avoid cycles.
+  Use the track_references tool to register URLs as followed before delegating.
 
   Commands:
-    track_references(command="classify_text", url="<thread content text>")
-      - Extracts and classifies all URLs found in the text
-      - Returns list of URLs with their types (mattermost_thread, launchpad_bug, github_issue, etc.)
-      - Automatically skips URLs already marked as followed
+    track_references(command="follow_url", url="<url>")
+      - Atomically checks if URL is already followed, checks depth, marks followed, and increments depth
+      - Returns outcome: "success" | "already_followed" | "depth_exceeded"
+      - On success: URL is marked followed and depth is incremented
+      - On already_followed: skip this URL (already processed)
+      - On depth_exceeded: stop following more URLs (max depth reached)
 
-    track_references(command="mark_followed", url="<url>")
-      - Marks a URL as followed to prevent duplicate processing
-
-    track_references(command="is_followed", url="<url>")
-      - Checks if a URL has already been followed
-
-    track_references(command="can_follow")
-      - Returns whether we can follow another level of references
-      - Reports current_depth/max_depth
-
-    track_references(command="increment_depth")
-      - Increments depth counter after following a reference
+    track_references(command="classify", url="<url>")
+      - Classifies a single URL to get its type and target sub-agent
+      - Returns: reference_type -> agent_type (e.g., launchpad_bug -> bug_researcher)
 
     track_references(command="reset")
-      - Resets tracker for a new summary operation
+      - Resets tracker state for a new summary operation
 
-  Example workflow with tracking:
-    1. After delegating to thread_fetcher, get the response content
-    2. track_references(command="classify_text", url="<thread content>")
-    3. For each URL in the response, decide if relevant to follow
-    4. Before following: track_references(command="is_followed", url="<url>")
-    5. If not followed and can_follow:
-       - track_references(command="mark_followed", url="<url>")
-       - track_references(command="increment_depth")
-       - delegate to appropriate sub-agent
-    6. After all references processed, call finish"""
+  After each delegation, you will receive a message listing references found in the result,
+  formatted as:
+    References found in delegation result:
+    1. <url>  (<type> → <sub-agent>)
+    URLs followed: N/M — can follow more
+
+  For each reference you judge as relevant:
+    1. Call track_references(command="follow_url", url="<url>")
+    2. If outcome is "success": delegate to the indicated sub-agent with a focused task
+    3. If outcome is "already_followed" or "depth_exceeded": skip this URL
+
+  If no references message is injected, there are no followable URLs — proceed to synthesize.
+  When you call finish, the summarization is complete."""
 
 
 def supports_json_mode(model: str) -> bool:
@@ -287,6 +284,7 @@ def build_orchestrator_agent(
     level: SummaryLevel,
     max_reference_depth: int = 3,
     critic: CriticBase | None = None,
+    tracker: ReferenceTracker | None = None,
 ) -> Agent:
     """Build an orchestrator agent that delegates to sub-agents.
 
@@ -350,7 +348,8 @@ def build_orchestrator_agent(
 
     from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
 
-    tracker = ReferenceTracker(max_depth=max_reference_depth)
+    if tracker is None:
+        tracker = ReferenceTracker(max_depth=max_reference_depth)
     track_references_tool_def = ReferenceTrackingTool.create(tracker)[0]
     oh_sdk.register_tool("track_references", track_references_tool_def)  # type: ignore[arg-type]
 

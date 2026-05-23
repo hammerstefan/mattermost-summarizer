@@ -332,3 +332,286 @@ class TestCriticEvaluation:
         assert critic.iterative_refinement is not None
         assert hasattr(critic.iterative_refinement, "success_threshold")
         assert hasattr(critic.iterative_refinement, "max_iterations")
+
+
+class TestReferenceTrackingExecutor:
+    """Tests for ReferenceTrackingExecutor follow_url command."""
+
+    def test_follow_url_success(self) -> None:
+        """Test follow_url returns success for new URL within depth."""
+        from mattermost_summarizer.subagents.reference_tracking_tool import (
+            ReferenceTrackingAction,
+            ReferenceTrackingExecutor,
+        )
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=3)
+        executor = ReferenceTrackingExecutor(tracker)
+        action = ReferenceTrackingAction(command="follow_url", url="https://bugs.launchpad.net/ubuntu/+bug/12345")
+
+        result = executor(action)
+
+        assert result.outcome == "success"
+        assert result.url == "https://bugs.launchpad.net/ubuntu/+bug/12345"
+        assert tracker.has_been_followed("https://bugs.launchpad.net/ubuntu/+bug/12345")
+        assert tracker.current_depth == 1
+
+    def test_follow_url_already_followed(self) -> None:
+        """Test follow_url returns already_followed for duplicate URL."""
+        from mattermost_summarizer.subagents.reference_tracking_tool import (
+            ReferenceTrackingAction,
+            ReferenceTrackingExecutor,
+        )
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=3)
+        executor = ReferenceTrackingExecutor(tracker)
+        url = "https://bugs.launchpad.net/ubuntu/+bug/12345"
+        action = ReferenceTrackingAction(command="follow_url", url=url)
+
+        result1 = executor(action)
+        assert result1.outcome == "success"
+
+        result2 = executor(action)
+        assert result2.outcome == "already_followed"
+        assert tracker.current_depth == 1
+
+    def test_follow_url_depth_exceeded(self) -> None:
+        """Test follow_url returns depth_exceeded at max depth."""
+        from mattermost_summarizer.subagents.reference_tracking_tool import (
+            ReferenceTrackingAction,
+            ReferenceTrackingExecutor,
+        )
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=1)
+        executor = ReferenceTrackingExecutor(tracker)
+        url1 = "https://bugs.launchpad.net/ubuntu/+bug/12345"
+        url2 = "https://bugs.launchpad.net/ubuntu/+bug/67890"
+        action1 = ReferenceTrackingAction(command="follow_url", url=url1)
+        action2 = ReferenceTrackingAction(command="follow_url", url=url2)
+
+        result1 = executor(action1)
+        assert result1.outcome == "success"
+
+        result2 = executor(action2)
+        assert result2.outcome == "depth_exceeded"
+        assert tracker.current_depth == 1
+        assert tracker.has_been_followed(url1)
+        assert not tracker.has_been_followed(url2)
+
+    def test_follow_url_atomic_under_lock(self) -> None:
+        """Test follow_url is atomic under tracker lock."""
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        from mattermost_summarizer.subagents.reference_tracking_tool import (
+            ReferenceTrackingAction,
+            ReferenceTrackingExecutor,
+        )
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=3)
+        executor = ReferenceTrackingExecutor(tracker)
+        url = "https://bugs.launchpad.net/ubuntu/+bug/12345"
+        action = ReferenceTrackingAction(command="follow_url", url=url)
+
+        results: list[str] = []
+        lock = threading.Lock()
+
+        def call_executor() -> None:
+            result = executor(action)
+            with lock:
+                results.append(result.outcome)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(call_executor) for _ in range(2)]
+            for f in futures:
+                f.result()
+
+        assert "success" in results
+        assert "already_followed" in results
+        assert tracker.current_depth == 1
+
+    def test_follow_url_requires_url(self) -> None:
+        """Test follow_url returns error when URL is missing."""
+        from mattermost_summarizer.subagents.reference_tracking_tool import (
+            ReferenceTrackingAction,
+            ReferenceTrackingExecutor,
+        )
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=3)
+        executor = ReferenceTrackingExecutor(tracker)
+        action = ReferenceTrackingAction(command="follow_url", url=None)
+
+        result = executor(action)
+
+        assert result.error is not None
+        assert "URL required" in result.error
+
+
+class TestReferenceTrackingToolDescription:
+    """Tests for ReferenceTrackingTool description."""
+
+    def test_tool_description_contains_follow_url(self) -> None:
+        """Test that tool description documents follow_url command."""
+        from mattermost_summarizer.subagents.reference_tracking_tool import ReferenceTrackingTool
+
+        tools = ReferenceTrackingTool.create()
+        assert len(tools) == 1
+        desc = tools[0].description
+        assert "follow_url" in desc
+        assert "success" in desc or "already_followed" in desc or "depth_exceeded" in desc
+
+    def test_tool_description_omits_classify_text(self) -> None:
+        """Test that tool description no longer mentions classify_text."""
+        from mattermost_summarizer.subagents.reference_tracking_tool import ReferenceTrackingTool
+
+        tools = ReferenceTrackingTool.create()
+        assert len(tools) == 1
+        desc = tools[0].description
+        assert "classify_text" not in desc
+
+    def test_tool_description_omits_old_commands(self) -> None:
+        """Test that tool description no longer mentions old bookkeeping commands."""
+        from mattermost_summarizer.subagents.reference_tracking_tool import ReferenceTrackingTool
+
+        tools = ReferenceTrackingTool.create()
+        assert len(tools) == 1
+        desc = tools[0].description
+        assert "mark_followed" not in desc
+        assert "is_followed" not in desc
+        assert "can_follow" not in desc
+        assert "increment_depth" not in desc
+
+
+class TestOrchestratorPromptUpdated:
+    """Tests for updated orchestrator prompt."""
+
+    def test_prompt_contains_follow_url_instructions(self) -> None:
+        """Test that orchestrator prompt explains follow_url usage."""
+        from mattermost_summarizer.agent import ORCHESTRATOR_PROMPT
+
+        assert "follow_url" in ORCHESTRATOR_PROMPT
+        assert "success" in ORCHESTRATOR_PROMPT
+        assert "already_followed" in ORCHESTRATOR_PROMPT
+        assert "depth_exceeded" in ORCHESTRATOR_PROMPT
+
+    def test_prompt_omits_classify_text(self) -> None:
+        """Test that orchestrator prompt no longer mentions classify_text."""
+        from mattermost_summarizer.agent import ORCHESTRATOR_PROMPT
+
+        assert "classify_text" not in ORCHESTRATOR_PROMPT
+
+    def test_prompt_omits_old_bookkeeping_commands(self) -> None:
+        """Test that orchestrator prompt no longer mentions old bookkeeping commands."""
+        from mattermost_summarizer.agent import ORCHESTRATOR_PROMPT
+
+        assert "mark_followed" not in ORCHESTRATOR_PROMPT
+        assert "is_followed" not in ORCHESTRATOR_PROMPT
+        assert "can_follow" not in ORCHESTRATOR_PROMPT
+        assert "increment_depth" not in ORCHESTRATOR_PROMPT
+
+    def test_prompt_mentions_injected_url_list(self) -> None:
+        """Test that orchestrator prompt mentions automatic URL injection."""
+        from mattermost_summarizer.agent import ORCHESTRATOR_PROMPT
+
+        assert "References found in delegation result" in ORCHESTRATOR_PROMPT
+
+
+class TestUrlInjectionMessage:
+    """Tests for URL injection message formatting."""
+
+    def test_format_url_injection_message_empty(self) -> None:
+        """Test formatting with no URLs."""
+        from mattermost_summarizer.summarizer import format_url_injection_message
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=3)
+        result = format_url_injection_message([], tracker)
+        assert result == ""
+
+    def test_format_url_injection_message_with_urls(self) -> None:
+        """Test formatting with URLs."""
+        from mattermost_summarizer.summarizer import format_url_injection_message
+        from mattermost_summarizer.tools.reference_tracker import (
+            ClassifiedUrl,
+            ReferenceTracker,
+            ReferenceType,
+        )
+
+        tracker = ReferenceTracker(max_depth=3)
+        urls = [
+            ClassifiedUrl(
+                url="https://bugs.launchpad.net/ubuntu/+bug/12345",
+                reference_type=ReferenceType.LAUNCHPAD_BUG,
+                agent_type="bug_researcher",
+            ),
+        ]
+        result = format_url_injection_message(urls, tracker)
+        assert "References found in delegation result" in result
+        assert "launchpad_bug" in result
+        assert "bug_researcher" in result
+
+    def test_format_url_injection_message_depth_info(self) -> None:
+        """Test that injection message includes depth info."""
+        from mattermost_summarizer.summarizer import format_url_injection_message
+        from mattermost_summarizer.tools.reference_tracker import (
+            ClassifiedUrl,
+            ReferenceTracker,
+            ReferenceType,
+        )
+
+        tracker = ReferenceTracker(max_depth=3)
+        tracker.increment_depth()
+        urls = [
+            ClassifiedUrl(
+                url="https://bugs.launchpad.net/ubuntu/+bug/12345",
+                reference_type=ReferenceType.LAUNCHPAD_BUG,
+                agent_type="bug_researcher",
+            ),
+        ]
+        result = format_url_injection_message(urls, tracker)
+        assert "URLs followed: 1/3" in result
+        assert "can follow more" in result
+
+
+class TestBuildOrchestratorAgentWithTracker:
+    """Tests for build_orchestrator_agent with tracker parameter."""
+
+    def test_build_orchestrator_agent_accepts_tracker(self) -> None:
+        """Test that build_orchestrator_agent accepts tracker parameter."""
+        from mattermost_summarizer.agent import build_orchestrator_agent
+        from mattermost_summarizer.levels import SummaryLevel
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=2)
+        agent = build_orchestrator_agent(
+            llm_model="openai/gpt-4o",
+            llm_api_key="test-key",
+            llm_base_url=None,
+            level=SummaryLevel.NORMAL,
+            tracker=tracker,
+        )
+
+        assert agent is not None
+        assert hasattr(agent, "llm")
+        assert hasattr(agent, "tools")
+
+    def test_build_orchestrator_agent_uses_provided_tracker(self) -> None:
+        """Test that build_orchestrator_agent uses the provided tracker."""
+        from mattermost_summarizer.agent import build_orchestrator_agent
+        from mattermost_summarizer.levels import SummaryLevel
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=2)
+        agent = build_orchestrator_agent(
+            llm_model="openai/gpt-4o",
+            llm_api_key="test-key",
+            llm_base_url=None,
+            level=SummaryLevel.NORMAL,
+            tracker=tracker,
+        )
+
+        assert agent is not None

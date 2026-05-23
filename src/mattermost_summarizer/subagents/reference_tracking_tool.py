@@ -27,8 +27,7 @@ class ReferenceTrackingObservation(Observation):
     command: str
     url: str | None = None
     result: str | None = None
-    is_followed: bool | None = None
-    can_follow_deeper: bool | None = None
+    outcome: str | None = None
     current_depth: int | None = None
     max_depth: int | None = None
     classified_urls: list[dict[str, Any]] | None = None
@@ -68,6 +67,37 @@ class ReferenceTrackingExecutor(ToolExecutor[ReferenceTrackingAction, ReferenceT
     ) -> ReferenceTrackingObservation:
         cmd = action.command
 
+        if cmd == "follow_url":
+            if not action.url:
+                return ReferenceTrackingObservation(command=cmd, error="URL required for follow_url command")
+            with self._tracker.lock():
+                if self._tracker.has_been_followed(action.url):
+                    return ReferenceTrackingObservation(
+                        command=cmd,
+                        url=action.url,
+                        outcome="already_followed",
+                        result="URL has already been followed",
+                    )
+                if not self._tracker.can_follow_deeper():
+                    return ReferenceTrackingObservation(
+                        command=cmd,
+                        url=action.url,
+                        outcome="depth_exceeded",
+                        current_depth=self._tracker.current_depth,
+                        max_depth=self._tracker.max_depth,
+                        result=f"Maximum depth ({self._tracker.max_depth}) reached",
+                    )
+                self._tracker.mark_followed(action.url)
+                self._tracker.increment_depth()
+            return ReferenceTrackingObservation(
+                command=cmd,
+                url=action.url,
+                outcome="success",
+                current_depth=self._tracker.current_depth,
+                max_depth=self._tracker.max_depth,
+                result="URL marked as followed and depth incremented",
+            )
+
         if cmd == "classify":
             if not action.url:
                 return ReferenceTrackingObservation(command=cmd, error="URL required for classify command")
@@ -85,74 +115,6 @@ class ReferenceTrackingExecutor(ToolExecutor[ReferenceTrackingAction, ReferenceT
                         "agent_type": classified.agent_type,
                     }
                 ],
-            )
-
-        if cmd == "classify_text":
-            if not action.url:
-                return ReferenceTrackingObservation(
-                    command=cmd, error="Text content required for classify_text command"
-                )
-            from mattermost_summarizer.tools.reference_tracker import classify_urls_in_text
-
-            classified_list = classify_urls_in_text(action.url, self._tracker)
-            return ReferenceTrackingObservation(
-                command=cmd,
-                classified_urls=[
-                    {
-                        "url": c.url,
-                        "reference_type": c.reference_type.value,
-                        "agent_type": c.agent_type,
-                    }
-                    for c in classified_list
-                ],
-                result=f"Found {len(classified_list)} URLs",
-            )
-
-        if cmd == "mark_followed":
-            if not action.url:
-                return ReferenceTrackingObservation(command=cmd, error="URL required for mark_followed command")
-            # Hold the lock across the check-then-act to prevent TOCTOU races
-            # when tools run concurrently.
-            with self._tracker.lock():
-                if not self._tracker.can_follow_deeper():
-                    return ReferenceTrackingObservation(
-                        command=cmd,
-                        url=action.url,
-                        error=f"Cannot follow URL: maximum depth ({self._tracker.max_depth}) reached. "
-                        f"Current depth: {self._tracker.current_depth}",
-                    )
-                self._tracker.mark_followed(action.url)
-            return ReferenceTrackingObservation(command=cmd, url=action.url, result="URL marked as followed")
-
-        if cmd == "is_followed":
-            if not action.url:
-                return ReferenceTrackingObservation(command=cmd, error="URL required for is_followed command")
-            is_followed = self._tracker.has_been_followed(action.url)
-            return ReferenceTrackingObservation(
-                command=cmd,
-                url=action.url,
-                is_followed=is_followed,
-                result="URL has been followed" if is_followed else "URL not yet followed",
-            )
-
-        if cmd == "can_follow":
-            can_follow = self._tracker.can_follow_deeper()
-            depth_msg = "can follow more" if can_follow else "max depth reached"
-            return ReferenceTrackingObservation(
-                command=cmd,
-                can_follow_deeper=can_follow,
-                current_depth=self._tracker.current_depth,
-                max_depth=self._tracker.max_depth,
-                result=f"Depth {self._tracker.current_depth}/{self._tracker.max_depth} - {depth_msg}",
-            )
-
-        if cmd == "increment_depth":
-            self._tracker.increment_depth()
-            return ReferenceTrackingObservation(
-                command=cmd,
-                current_depth=self._tracker.current_depth,
-                max_depth=self._tracker.max_depth,
-                result=f"Depth incremented to {self._tracker.current_depth}",
             )
 
         if cmd == "reset":
@@ -179,13 +141,9 @@ class ReferenceTrackingTool(ToolDefinition[ReferenceTrackingAction, ReferenceTra
                 description=(
                     "Track and classify URLs to prevent cycles during recursive reference following. "
                     "Commands: "
-                    "classify - Classify a single URL (param: url) -> returns reference type and agent type; "
-                    "classify_text - Extract and classify all URLs from text content (param: url as text) "
-                    "-> returns list of classified URLs; "
-                    "mark_followed - Mark a URL as followed to prevent cycles (param: url); "
-                    "is_followed - Check if a URL has already been followed (param: url); "
-                    "can_follow - Check if we can follow another level of references; "
-                    "increment_depth - Increment the depth counter after following a reference; "
+                    "follow_url - Atomically check, mark, and register a URL as followed. "
+                    "Returns: success | already_followed | depth_exceeded (param: url); "
+                    "classify - Classify a single URL to get its type and target sub-agent (param: url); "
                     "reset - Reset tracker state for a new summary operation"
                 ),
                 action_type=ReferenceTrackingAction,

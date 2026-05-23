@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from collections.abc import Generator
@@ -108,11 +109,14 @@ MATTERMOST_FILE_PATTERNS = [
 ]
 
 
-def _sanitize_url(url: str) -> str:
+def sanitize_url(url: str) -> str:
     """Sanitize a URL to avoid parser errors.
 
     Replaces bracketed IPv6 literals (e.g. http://[fd00::1]/path) with a
     placeholder so downstream URL parsers don't raise "Invalid IPv6 URL".
+    Also strips bare ``[`` that lack a closing ``]`` in the authority
+    section (before the first ``/``, ``?``, or ``#``) — these can be
+    caused by ``extract_urls_from_text`` truncating at ``]``.
 
     Args:
         url: Raw URL string
@@ -120,8 +124,16 @@ def _sanitize_url(url: str) -> str:
     Returns:
         Sanitized URL safe for urlparse
     """
-    # Replace bracketed IPv6 addresses with a placeholder hostname
-    return re.sub(r"\[([0-9a-fA-F:]+)\]", "ipv6-placeholder", url)
+    url = re.sub(r"\[([0-9a-fA-F:]+)\]", "ipv6-placeholder", url)
+    m = re.match(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^/?#]*)(.*)", url)
+    if m:
+        scheme_and_authority = m.group(1).replace("[", "")
+        url = scheme_and_authority + m.group(2)
+    # Strip a trailing ] only when it has no matching [ in the URL —
+    # these arise from malformed markdown like [text](https://example.com]).
+    if url.endswith("]") and url.count("[") < url.count("]"):
+        url = url[:-1]
+    return url
 
 
 def classify_url(url: str) -> ReferenceType:
@@ -133,7 +145,7 @@ def classify_url(url: str) -> ReferenceType:
     Returns:
         ReferenceType enum value
     """
-    parsed = urlparse(_sanitize_url(url))
+    parsed = urlparse(sanitize_url(url))
     netloc = parsed.netloc.lower()
     path = parsed.path.lower()
 
@@ -207,9 +219,7 @@ def extract_urls_from_text(text: str) -> list[str]:
     Returns:
         List of URLs found
     """
-    url_pattern = re.compile(
-        r"https?://[^\s<>\"'\)\]]+|[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z0-9][a-zA-Z0-9-]*[^\s<>\"'\)\]]*"
-    )
+    url_pattern = re.compile(r"https?://[^\s<>\"'\)]+|[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z0-9][a-zA-Z0-9-]*[^\s<>\"'\)]*")
     urls: list[str] = []
     seen: set[str] = set()
 
@@ -236,10 +246,13 @@ def classify_urls_in_text(text: str, tracker: ReferenceTracker | None = None) ->
     results: list[ClassifiedUrl] = []
 
     for url in urls:
-        classified = classify_url_full(url)
         if tracker and tracker.has_been_followed(url):
             continue
-        results.append(classified)
+        try:
+            classified = classify_url_full(url)
+            results.append(classified)
+        except ValueError as e:
+            logging.getLogger(__name__).warning("Skipping unparseable URL: %s  reason=%s", url, e)
 
     return results
 
@@ -286,6 +299,7 @@ __all__ = [
     "ReferenceType",
     "ClassifiedUrl",
     "ReferenceTracker",
+    "sanitize_url",
     "classify_url",
     "classify_url_full",
     "get_agent_for_reference_type",

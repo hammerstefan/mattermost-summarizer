@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import tempfile
 import time
 from pathlib import Path
 
 from openhands.sdk import LocalConversation
+from openhands.sdk.event.llm_convertible.observation import ObservationEvent
+from openhands.tools.delegate.definition import DelegateObservation
 
 from mattermost_summarizer.agent import build_orchestrator_agent
 from mattermost_summarizer.client import MattermostClient
@@ -26,6 +29,11 @@ from mattermost_summarizer.levels import (
     SummaryMeta,
 )
 from mattermost_summarizer.subagents import register_subagents
+from mattermost_summarizer.tools.reference_tracker import (
+    ClassifiedUrl,
+    ReferenceTracker,
+    classify_urls_in_text,
+)
 from mattermost_summarizer.utils import parse_permalink
 from mattermost_summarizer.visualizer import FileConversationVisualizer
 
@@ -124,6 +132,8 @@ class MattermostSummarizer:
                     level=level,
                 )
 
+            tracker = ReferenceTracker(max_depth=self.config.max_reference_depth)
+
             agent = build_orchestrator_agent(
                 llm_model=self.config.llm_model,
                 llm_api_key=self.config.llm_api_key.get_secret_value(),
@@ -131,6 +141,7 @@ class MattermostSummarizer:
                 level=level,
                 max_reference_depth=self.config.max_reference_depth,
                 critic=critic,
+                tracker=tracker,
             )
 
             conv_ref: list[LocalConversation | None] = [None]
@@ -146,17 +157,47 @@ class MattermostSummarizer:
                     finish_seen_ref[0] = True
                     conv_ref[0].pause()
 
+            pause_callback = _make_pause_after_delegation_callback(conv_ref)
+
             conversation = LocalConversation(
                 agent=agent,
                 workspace=tmpdir,
                 visualizer=visualizer,
-                callbacks=[_on_finish_callback],
+                callbacks=[_on_finish_callback, pause_callback.callback],
             )
             conv_ref[0] = conversation
 
             conversation.send_message(message)  # type: ignore[arg-type, misc]
 
-            conversation.run()  # type: ignore[misc]
+            _MAX_DELEGATION_ITERATIONS = 20
+            for _iteration in range(_MAX_DELEGATION_ITERATIONS):
+                if finish_seen_ref[0]:
+                    break
+                pause_callback.reset()
+                conversation.run()  # type: ignore[misc]
+
+                if finish_seen_ref[0]:
+                    break
+
+                delegate_text = _extract_last_delegate_observation(conversation)
+                if not delegate_text:
+                    # No delegation observed — orchestrator went straight to finish or
+                    # something unexpected occurred; exit the loop.
+                    break
+
+                classified_urls = classify_urls_in_text(delegate_text, tracker)
+
+                if classified_urls:
+                    url_message = format_url_injection_message(classified_urls, tracker)
+                    if url_message:
+                        conversation.send_message(url_message)  # type: ignore[arg-type, misc]
+                # If no classified_urls: no message injected; loop continues and run()
+                # will let the orchestrator proceed to synthesize and call finish.
+            else:
+                logging.getLogger(__name__).warning(
+                    "Summarization loop reached max iterations (%d) without finishing.",
+                    _MAX_DELEGATION_ITERATIONS,
+                )
 
             try:
                 finish_action = _extract_finish_action(conversation)
@@ -247,6 +288,53 @@ class MattermostSummarizer:
                 visualizer.close()
 
 
+class _PauseAfterDelegationCallback:
+    """Factory-produced callback that pauses `run()` on the first delegate-command DelegateObservation.
+
+    Usage::
+
+        cb = _make_pause_after_delegation_callback(conv_ref)
+        conversation = LocalConversation(..., callbacks=[..., cb.callback])
+        # Before each conv.run() call:
+        cb.reset()
+        conversation.run()
+    """
+
+    def __init__(self, conv_ref: list[LocalConversation | None]) -> None:
+        self._conv_ref = conv_ref
+        self._fired = False
+
+    def reset(self) -> None:
+        """Re-arm the callback for the next run() segment."""
+        self._fired = False
+
+    def callback(self, event: object) -> None:
+        if self._fired:
+            return
+        if not isinstance(event, ObservationEvent):
+            return
+        if not isinstance(event.observation, DelegateObservation):
+            return
+        if event.observation.command != "delegate":
+            return
+        self._fired = True
+        conv = self._conv_ref[0]
+        if conv is not None:
+            conv.pause()
+
+
+def _make_pause_after_delegation_callback(
+    conv_ref: list[LocalConversation | None],
+) -> _PauseAfterDelegationCallback:
+    """Create a pause-after-delegation callback bound to *conv_ref*.
+
+    The callback fires exactly once per run() segment (re-armed via ``reset()``).
+    It fires only on ``DelegateObservation`` events where ``command == "delegate"``,
+    ignoring spawn observations and all other event types.
+    """
+    return _PauseAfterDelegationCallback(conv_ref)
+
+
 def _extract_finish_action(conversation: LocalConversation) -> SummarizerFinishActionBase | None:
     """Scan conversation events for a SummarizerFinishAction."""
     if not hasattr(conversation, "state") or not conversation.state:
@@ -291,3 +379,48 @@ def _estimate_thread_length(conversation: LocalConversation) -> int:
                     return int(obs.total_replies) + 1
 
     return fetch_count + 1
+
+
+def _extract_last_delegate_observation(conversation: LocalConversation) -> str | None:
+    """Extract text from the most recent delegate-command DelegateObservation.
+
+    Scans conversation.state.events in reverse for the most recent
+    ObservationEvent where observation is a DelegateObservation with
+    command == "delegate".
+    """
+    if not hasattr(conversation, "state") or not conversation.state:
+        return None
+
+    events = getattr(conversation.state, "events", [])
+
+    for event in reversed(events):
+        if isinstance(event, ObservationEvent):
+            if isinstance(event.observation, DelegateObservation):
+                if event.observation.command == "delegate":
+                    text_parts: list[str] = []
+                    for c in event.observation.to_llm_content:
+                        if hasattr(c, "text"):
+                            text_parts.append(c.text)
+                    return "".join(text_parts)
+
+    return None
+
+
+def format_url_injection_message(
+    classified_urls: list[ClassifiedUrl],
+    tracker: ReferenceTracker,
+) -> str:
+    """Format the classified URL list as an injected user message."""
+    if not classified_urls:
+        return ""
+
+    lines: list[str] = ["References found in delegation result:"]
+    for i, ref in enumerate(classified_urls, 1):
+        lines.append(f"{i}. {ref.url}  ({ref.reference_type.value} -> {ref.agent_type})")
+
+    depth_status = "can follow more" if tracker.can_follow_deeper() else "max depth reached"
+    lines.append(f"URLs followed: {tracker.current_depth}/{tracker.max_depth} — {depth_status}")
+    lines.append("")
+    lines.append("Decide which (if any) are relevant and call follow_url before delegating.")
+
+    return "\n".join(lines)
