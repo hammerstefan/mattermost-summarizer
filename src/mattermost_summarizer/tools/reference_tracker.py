@@ -187,7 +187,7 @@ def get_agent_for_reference_type(ref_type: ReferenceType) -> str:
     elif ref_type == ReferenceType.MATTERMOST_FILE:
         return "file_fetcher"
     else:
-        return "thread_fetcher"
+        raise ValueError(f"No sub-agent defined for reference type: {ref_type}")
 
 
 def classify_url_full(url: str) -> ClassifiedUrl:
@@ -250,7 +250,8 @@ def classify_urls_in_text(text: str, tracker: ReferenceTracker | None = None) ->
             continue
         try:
             classified = classify_url_full(url)
-            results.append(classified)
+            if classified.reference_type != ReferenceType.UNKNOWN:
+                results.append(classified)
         except ValueError as e:
             logging.getLogger(__name__).warning("Skipping unparseable URL: %s  reason=%s", url, e)
 

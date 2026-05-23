@@ -58,93 +58,36 @@ GetUser if you need additional details about a specific user."""
 
 ORCHESTRATOR_PROMPT = """You are the orchestrator for a Mattermost conversation summarization system.
 
-Your job is to coordinate specialized sub-agents to gather context and produce a summary.
+Your job is to coordinate gathering context and producing a summary.
 
  Coordination Flow:
   1. Parse the permalink URL from the user message
-  2. Delegate to the thread_fetcher sub-agent to fetch the root thread
-  3. Receive the fetched thread content and scan it for references:
-     - Mattermost permalinks (thread URLs)
-     - Launchpad bug URLs (bugs.launchpad.net/...)
-     - GitHub issue/PR URLs (github.com/...)
-     - File attachment references
+  2. Use the fetch_reference tool to fetch the root thread
+  3. Receive the fetched thread content and scan the provided list of references
   4. Decide which references are relevant to follow based on the thread context
-  5. Delegate to appropriate sub-agents for relevant references:
-     - thread_fetcher: for Mattermost thread permalinks
-     - bug_researcher: for Launchpad bug URLs
-     - github_researcher: for GitHub issue/PR URLs
-     - file_fetcher: for Mattermost file attachments
-  6. Repeat steps 3-5 up to the maximum reference depth (default: 3)
+  5. Use the fetch_reference tool on the relevant references
+  6. Repeat steps 3-5 up to the maximum reference depth
   7. Synthesize all gathered context into a coherent summary
   8. Call the finish tool with the structured summary
 
  Important constraints:
- - Do NOT fetch data directly - always delegate to the appropriate sub-agent
- - Track which URLs you have already followed to avoid cycles
  - Only follow references that are relevant to understanding the thread
  - When in doubt, prefer following fewer references rather than more
- - Always delegate the root thread to thread_fetcher first
- - Do NOT follow the same URL twice - keep track of followed URLs
+ - The fetch_reference tool handles cyclic checking, depth checking, and sub-agent delegation for you. 
+ - If fetch_reference returns an error (like "Unsupported URL type" or "Already followed"), simply ignore that URL and move on.
 
- Reference types and their sub-agents:
- - Mattermost thread URLs (chat.example.com/team/pl/...) → thread_fetcher
- - Launchpad bugs (bugs.launchpad.net/...) → bug_researcher
- - GitHub issues/PRs (github.com/.../issues/..., github.com/.../pull/...) → github_researcher
- - Mattermost file attachments → file_fetcher
+  Example - Fetching a thread:
+    fetch_reference(url="https://chat.example.com/team/pl/abc123")
 
- URL Classification Examples:
- - "https://bugs.launchpad.net/ubuntu/+bug/12345" → bug_researcher
- - "https://github.com/canonical/mattermost/issues/789" → github_researcher
- - "https://github.com/canonical/mattermost/pull/456" → github_researcher
- - "https://chat.example.com/team/pl/abc123" → thread_fetcher
-
- To delegate, you MUST use TWO steps:
-
-  Step 1 - SPAWN: Create sub-agents with specific IDs
-    delegate(
-      command="spawn",
-      ids=["my_agent_id"],
-      agent_types=["thread_fetcher"]
-    )
-
-  Step 2 - DELEGATE: Send tasks to already-spawned agents
-    delegate(
-      command="delegate",
-      tasks={"my_agent_id": "Your task description here"}
-    )
-
-  Example - Complete workflow to fetch a thread:
-    1. delegate(command="spawn", ids=["fetcher_1"], agent_types=["thread_fetcher"])
-    2. delegate(command="delegate", tasks={"fetcher_1": "Fetch Mattermost thread from permalink: https://chat.example.com/team/pl/abc123"})
-
-  Reference Tracking Tool (track_references):
-  Use the track_references tool to register URLs as followed before delegating.
-
-  Commands:
-    track_references(command="follow_url", url="<url>")
-      - Atomically checks if URL is already followed, checks depth, marks followed, and increments depth
-      - Returns outcome: "success" | "already_followed" | "depth_exceeded"
-      - On success: URL is marked followed and depth is incremented
-      - On already_followed: skip this URL (already processed)
-      - On depth_exceeded: stop following more URLs (max depth reached)
-
-    track_references(command="classify", url="<url>")
-      - Classifies a single URL to get its type and target sub-agent
-      - Returns: reference_type -> agent_type (e.g., launchpad_bug -> bug_researcher)
-
-    track_references(command="reset")
-      - Resets tracker state for a new summary operation
-
-  After each delegation, you will receive a message listing references found in the result,
+  After each fetch, you will receive a message listing references found in the result,
   formatted as:
     References found in delegation result:
-    1. <url>  (<type> → <sub-agent>)
+    1. <url>  (<type>)
     URLs followed: N/M — can follow more
 
   For each reference you judge as relevant:
-    1. Call track_references(command="follow_url", url="<url>")
-    2. If outcome is "success": delegate to the indicated sub-agent with a focused task
-    3. If outcome is "already_followed" or "depth_exceeded": skip this URL
+    1. Call fetch_reference(url="<url>")
+    2. Read the results and incorporate them into your understanding.
 
   If no references message is injected, there are no followable URLs — proceed to synthesize.
   When you call finish, the summarization is complete."""
@@ -308,8 +251,8 @@ def build_orchestrator_agent(
         SummaryLevel,
     )
     from mattermost_summarizer.levels.base import SummarizerFinishToolBase
-    from mattermost_summarizer.subagents.delegate_tool import DelegateTool
-    from mattermost_summarizer.subagents.reference_tracking_tool import ReferenceTrackingTool
+
+    from mattermost_summarizer.subagents.fetch_reference_tool import FetchReferenceTool
 
     extra_body: dict[str, object] | None = None
     enable_json_mode = supports_json_mode(llm_model)
@@ -334,9 +277,6 @@ def build_orchestrator_agent(
 
     llm = LLM(**llm_kwargs)  # type: ignore[arg-type]
 
-    delegate_tool_def = DelegateTool.create()[0]
-    oh_sdk.register_tool("delegate", delegate_tool_def)  # type: ignore[arg-type]
-
     if level == SummaryLevel.BRIEF:
         finish_tool_def: SummarizerFinishToolBase = BriefFinishTool.create()[0]
     elif level == SummaryLevel.DETAILED:
@@ -350,13 +290,12 @@ def build_orchestrator_agent(
 
     if tracker is None:
         tracker = ReferenceTracker(max_depth=max_reference_depth)
-    track_references_tool_def = ReferenceTrackingTool.create(tracker)[0]
-    oh_sdk.register_tool("track_references", track_references_tool_def)  # type: ignore[arg-type]
+    fetch_ref_tool_def = FetchReferenceTool.create(tracker)[0]
+    oh_sdk.register_tool("fetch_reference", fetch_ref_tool_def)  # type: ignore[arg-type]
 
     tools: list[Tool] = [
-        Tool(name="delegate", params={}),
+        Tool(name="fetch_reference", params={}),
         Tool(name="finish", params={}),
-        Tool(name="track_references", params={}),
     ]
 
     agent_kwargs: dict[str, object] = {
