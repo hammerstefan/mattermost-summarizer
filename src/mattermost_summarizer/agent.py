@@ -60,37 +60,39 @@ ORCHESTRATOR_PROMPT = """You are the orchestrator for a Mattermost conversation 
 
 Your job is to coordinate gathering context and producing a summary.
 
- Coordination Flow:
+Coordination Flow:
   1. Parse the permalink URL from the user message
-  2. Use the fetch_reference tool to fetch the root thread
-  3. Receive the fetched thread content and scan the provided list of references
-  4. Decide which references are relevant to follow based on the thread context
-  5. Use the fetch_reference tool on the relevant references
-  6. Repeat steps 3-5 up to the maximum reference depth
-  7. Synthesize all gathered context into a coherent summary
-  8. Call the finish tool with the structured summary
+  2. Call fetch_reference(url=<permalink>) to fetch the root thread
+  3. Read the result. At the end of the result you will find a section like:
 
- Important constraints:
- - Only follow references that are relevant to understanding the thread
- - When in doubt, prefer following fewer references rather than more
- - The fetch_reference tool handles cyclic checking, depth checking, and sub-agent delegation for you. 
- - If fetch_reference returns an error (like "Unsupported URL type" or "Already followed"), simply ignore that URL and move on.
+       ---
+       References found in result:
+       Found the following references in the content:
 
-  Example - Fetching a thread:
-    fetch_reference(url="https://chat.example.com/team/pl/abc123")
+       1. https://github.com/org/repo/issues/123  (GitHub issue/PR)
+       2. https://bugs.launchpad.net/...  (Launchpad bug)
+       3. https://chat.example.com/team/pl/abc123  (Mattermost thread)
 
-  After each fetch, you will receive a message listing references found in the result,
-  formatted as:
-    References found in delegation result:
-    1. <url>  (<type>)
-    URLs followed: N/M — can follow more
+       Current depth: 0/3
+       You may delegate to appropriate sub-agents to fetch additional context.
 
-  For each reference you judge as relevant:
-    1. Call fetch_reference(url="<url>")
-    2. Read the results and incorporate them into your understanding.
+  4. For each reference you judge as relevant, call fetch_reference(url=<url>).
+     Relevance criteria: prefer PRs/issues/bugs that are directly mentioned as
+     fixes, blockers, or root causes. Skip documentation links and tangential URLs.
+  5. Repeat step 3-4 with each result until no more references appear or depth is reached.
+  6. Synthesize all gathered context into a coherent summary.
+  7. Call the finish tool with the structured summary.
 
-  If no references message is injected, there are no followable URLs — proceed to synthesize.
-  When you call finish, the summarization is complete."""
+Important constraints:
+  - You MUST follow up on references listed in the "References found in result" section —
+    do not skip them unless you have explicitly reasoned that they are irrelevant.
+  - The fetch_reference tool handles cycle detection and depth limiting automatically.
+    If it returns an error (e.g. "Already followed", "Maximum depth reached",
+    "Unsupported URL type") simply skip that URL and continue.
+  - When the "References found" section says "Maximum reference depth reached",
+    stop following references and proceed to synthesize.
+  - If the result contains no "References found" section, there are no followable
+    URLs — proceed directly to synthesize and call finish."""
 
 
 def supports_json_mode(model: str) -> bool:

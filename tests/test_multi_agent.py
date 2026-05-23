@@ -517,7 +517,7 @@ class TestOrchestratorPromptUpdated:
         """Test that orchestrator prompt mentions automatic URL injection."""
         from mattermost_summarizer.agent import ORCHESTRATOR_PROMPT
 
-        assert "References found in delegation result" in ORCHESTRATOR_PROMPT
+        assert "References found in result" in ORCHESTRATOR_PROMPT
 
 
 class TestUrlInjectionMessage:
@@ -615,3 +615,150 @@ class TestBuildOrchestratorAgentWithTracker:
         )
 
         assert agent is not None
+
+
+class TestFetchReferenceInjection:
+    """Tests for the References-found block injected by FetchReferenceExecutor."""
+
+    def _make_executor(self):
+        import itertools
+        from unittest.mock import MagicMock, patch
+
+        from mattermost_summarizer.subagents.fetch_reference_tool import FetchReferenceExecutor
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=3)
+
+        with patch("openhands.tools.delegate.impl.DelegateExecutor.__init__", return_value=None):
+            executor = FetchReferenceExecutor.__new__(FetchReferenceExecutor)
+            executor._tracker = tracker
+            executor._delegate_executor = MagicMock()
+            executor._agent_counter = itertools.count()
+
+        return executor
+
+    def _run_with_delegate_result(self, executor, result_text, url="https://chat.canonical.com/canonical/pl/abc123"):
+        from unittest.mock import MagicMock
+
+        from openhands.sdk.llm.message import TextContent
+
+        spawn_obs = MagicMock()
+        spawn_obs.is_error = False
+
+        delegate_obs = MagicMock()
+        delegate_obs.to_llm_content = [TextContent(text=result_text)]
+
+        executor._delegate_executor.side_effect = [spawn_obs, delegate_obs]
+
+        from mattermost_summarizer.subagents.fetch_reference_tool import FetchReferenceAction
+
+        action = FetchReferenceAction(url=url)
+        return executor(action)
+
+    def test_no_references_in_result_has_no_block(self):
+        """When the sub-agent result has no known URLs, no References block is appended."""
+        executor = self._make_executor()
+        result_text = "This thread is about a simple deployment question. No links mentioned."
+        obs = self._run_with_delegate_result(executor, result_text)
+
+        assert obs.error is None
+        assert "References found in result" not in obs.result
+        assert result_text in obs.result
+
+    def test_github_url_in_result_triggers_block(self):
+        """When result contains a GitHub issue URL, a References block is appended."""
+        executor = self._make_executor()
+        result_text = (
+            "Thread summary: user reports bug.\n"
+            "Relevant PR: https://github.com/canonical/cloud-init/pull/6843\n"
+            "Also see issue https://github.com/canonical/cloud-init/issues/6844"
+        )
+        obs = self._run_with_delegate_result(executor, result_text)
+
+        assert obs.error is None
+        assert "References found in result" in obs.result
+        assert "https://github.com/canonical/cloud-init/pull/6843" in obs.result
+        assert "https://github.com/canonical/cloud-init/issues/6844" in obs.result
+        assert "GitHub issue/PR" in obs.result
+
+    def test_launchpad_url_in_result_triggers_block(self):
+        """When result contains a Launchpad bug URL, a References block is appended."""
+        executor = self._make_executor()
+        result_text = "See LP bug: https://bugs.launchpad.net/ubuntu/+source/open-iscsi/+bug/2098515"
+        obs = self._run_with_delegate_result(executor, result_text)
+
+        assert obs.error is None
+        assert "References found in result" in obs.result
+        assert "https://bugs.launchpad.net/ubuntu/+source/open-iscsi/+bug/2098515" in obs.result
+        assert "Launchpad bug" in obs.result
+
+    def test_already_followed_url_excluded_from_block(self):
+        """URLs already followed by the tracker are not listed in the References block."""
+        executor = self._make_executor()
+        already_followed = "https://github.com/canonical/cloud-init/issues/6844"
+        executor._tracker.mark_followed(already_followed)
+
+        result_text = f"See {already_followed} and also https://github.com/canonical/cloud-init/pull/6843"
+        obs = self._run_with_delegate_result(executor, result_text)
+
+        assert obs.error is None
+        # The already-followed URL must not appear in the injected block
+        if "References found in result" in obs.result:
+            block = obs.result.split("References found in result")[1]
+            assert already_followed not in block
+            assert "https://github.com/canonical/cloud-init/pull/6843" in block
+
+    def test_depth_reached_suppresses_block(self):
+        """When max depth is already reached, no References block is appended."""
+        executor = self._make_executor()
+        # Root fetch (no increment) + 3 increments = depth 3 = at/over max
+        executor._tracker.mark_followed("https://chat.canonical.com/canonical/pl/root")
+        for _ in range(3):
+            executor._tracker.increment_depth()
+
+        assert not executor._tracker.can_follow_deeper()
+
+        result_text = "See PR: https://github.com/canonical/cloud-init/pull/6843"
+        obs = self._run_with_delegate_result(
+            executor,
+            result_text,
+            url="https://chat.canonical.com/canonical/pl/xyz",
+        )
+
+        # Either depth-error short-circuit or no References block
+        if obs.error:
+            assert "depth" in obs.error.lower()
+        else:
+            assert "References found in result" not in obs.result
+
+    def test_block_contains_depth_info(self):
+        """The injected block includes current depth information."""
+        executor = self._make_executor()
+        result_text = "PR: https://github.com/canonical/cloud-init/pull/6843"
+        obs = self._run_with_delegate_result(executor, result_text)
+
+        assert obs.error is None
+        assert "Current depth:" in obs.result
+
+    def test_result_text_preserved_before_block(self):
+        """The original result text appears before the References block."""
+        executor = self._make_executor()
+        result_text = "SUMMARY_MARKER: https://github.com/canonical/cloud-init/pull/1"
+        obs = self._run_with_delegate_result(executor, result_text)
+
+        assert obs.error is None
+        assert obs.result.startswith("SUMMARY_MARKER")
+        ref_idx = obs.result.index("---\nReferences found")
+        assert "SUMMARY_MARKER" in obs.result[:ref_idx]
+
+    def test_unknown_urls_not_in_references_block(self):
+        """Non-followable URLs (docs pages etc.) are excluded from the block."""
+        executor = self._make_executor()
+        result_text = "See https://docs.ubuntu.com/some-page and https://github.com/canonical/cloud-init/issues/9999"
+        obs = self._run_with_delegate_result(executor, result_text)
+
+        assert obs.error is None
+        if "References found in result" in obs.result:
+            block = obs.result.split("References found in result")[1]
+            assert "docs.ubuntu.com" not in block
+            assert "https://github.com/canonical/cloud-init/issues/9999" in block

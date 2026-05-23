@@ -104,7 +104,24 @@ class FetchReferenceExecutor(ToolExecutor[FetchReferenceAction, FetchReferenceOb
         delegate_obs = self._delegate_executor(delegate_action, conversation)  # type: ignore
 
         result_text = "\n".join(c.text for c in delegate_obs.to_llm_content if hasattr(c, "text"))
-        return FetchReferenceObservation(result=result_text)
+
+        # Scan the sub-agent's result for new followable URLs and append a
+        # structured "References found" block so the orchestrator knows exactly
+        # which URLs it should consider calling fetch_reference on next.
+        from mattermost_summarizer.tools.reference_tracker import (
+            classify_urls_in_text,
+            build_reference_following_prompt,
+        )
+
+        followable = classify_urls_in_text(result_text, self._tracker)
+        # Also filter out URLs that are already at/over depth limit
+        if followable and self._tracker.can_follow_deeper():
+            ref_block = build_reference_following_prompt(followable, self._tracker)
+            full_result = f"{result_text}\n\n---\nReferences found in result:\n{ref_block}"
+        else:
+            full_result = result_text
+
+        return FetchReferenceObservation(result=full_result)
 
 
 class FetchReferenceTool(ToolDefinition[FetchReferenceAction, FetchReferenceObservation]):
