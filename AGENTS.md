@@ -44,6 +44,22 @@ This document defines baseline expectations for all development work in this pro
 3. Run type checking: `uv run mypy .` and/or `uv run pyright`
 4. Run tests: `uv run pytest -n auto`
 
+## MLflow Tracing
+
+An MLflow server is available at `http://127.0.0.1:5000` for tracing LLM calls.
+
+- **Experiment ID**: `0` — used for mattermost-summarizer runs
+- Traces are configured via environment variables in `summarize.py` (OTLP exporter with `http/protobuf` protocol)
+- View traces at `http://127.0.0.1:5000` in the browser
+
+## Context Finding
+
+Use the following sources for code and API context:
+
+1. **Installed openhands SDK**: `semble repo=.venv/lib/python3.14/site-packages/openhands`
+2. **Full openhands SDK source & examples**: `semble repo=https://github.com/OpenHands/software-agent-sdk.git`
+3. **Mattermost source & API docs**: `semble repo=https://github.com/mattermost/mattermost.git`
+4. **General documentation**: Use `context7` (resolve library ID then query docs)
 
 ### Code Search
 
