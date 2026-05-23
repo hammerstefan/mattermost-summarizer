@@ -2,7 +2,7 @@
 
 The orchestrator agent runs inside a single `LocalConversation.run()` call. All 21 orchestrator steps — including URL classification and per-URL bookkeeping — execute as LLM-driven tool calls within that loop. Two categories of pure-Python work are unnecessarily exposed as LLM tools:
 
-1. **`classify_text`**: extracts URLs from the 44K-char thread text using regex. The LLM echoes the full text as a tool argument, permanently inflating the conversation context from ~10K to ~693K tokens and consuming ~3.3M input tokens per run. Cost: ~2 round-trips and massive context bloat.
+1. **`classify_text`**: extracts URLs from the 44K-char thread text using regex. The LLM echoes the full ~44K-char thread text as a tool argument. Since the same text is already present in the conversation as a `DelegateObservation` result, this creates a **duplicate** copy in the context, growing it from ~10K baseline to ~693K tokens (~683K of duplicated content) and consuming ~3.3M input tokens per run. Cost: ~2 round-trips and massive context bloat.
 
 2. **4-step bookkeeping per URL** (`is_followed` → `can_follow` → `mark_followed` → `increment_depth`): 12 LLM round-trips for 3 URLs with zero LLM judgment between steps. Cost: ~141s of 571s total wall time.
 
@@ -33,9 +33,9 @@ However, all production-like SDK examples perform Python enrichment *before* `ru
 
 **Choice**: In `summarizer.py`, replace the single `run()` call with a depth loop driven by a `_pause_after_delegation_callback`. At each depth:
 
-1. Register a callback that calls `conv.pause()` on the first `DelegateObservation` received
+1. Register a callback that calls `conv.pause()` on the first `delegate`-command `DelegateObservation` received (not spawn)
 2. Call `conv.run()` — it runs until the first delegation completes, then pauses
-3. Python extracts the `DelegateObservation` text from `conversation.state.events`
+3. Python extracts the `DelegateObservation` text from `conversation.state.events` (unwrapping from `ObservationEvent`)
 4. Python calls `classify_urls_in_text(text, tracker)` — pure regex, microseconds
 5. If followable URLs found, Python formats a compact classified list and calls `conv.send_message(...)` to inject it as the next user message
 6. Python clears the pause-after-delegation callback (or re-arms for the next depth)
@@ -49,7 +49,7 @@ The `_on_finish_callback` already uses `pause()` to stop after finish — that m
 References found in delegation result:
 1. https://github.com/o/r/pull/6843  (github_pr → github_researcher)
 2. https://bugs.launchpad.net/ubuntu/+bug/2098515  (launchpad_bug → bug_researcher)
-Depth: 1/3 — can follow more
+URLs followed: 1/3 — can follow more
 
 Decide which (if any) are relevant and call follow_url before delegating.
 ```
@@ -72,7 +72,7 @@ If no followable URLs found: no message is injected and `run()` continues withou
 
 Returns one of three outcomes: `success | already_followed | depth_exceeded`.
 
-Remove `is_followed`, `can_follow`, `mark_followed`, `increment_depth` from executor and tool description. Retain `classify` (single-URL classification, still useful for the LLM to confirm routing before delegation) and `reset`.
+Remove `is_followed`, `can_follow`, `mark_followed`, `increment_depth` from executor and tool description. Retain `classify` (single-URL classification) and `reset`. Note: the injected URL list already provides type+agent for each URL, so `classify` is technically redundant for the v2 flow. It is retained as a low-cost fallback that costs no round-trips when unused and may help if the LLM encounters a URL outside the injected list (e.g., from its own reasoning).
 
 **Rationale**: Saves 3 round-trips per URL (9 for a typical 3-URL run). No LLM judgment occurs between the 4 steps — they always run unconditionally. Atomicity under lock also removes a latent TOCTOU race in parallel delegation scenarios.
 
@@ -96,7 +96,7 @@ After each delegation, you will receive a message listing references found in th
 formatted as:
   References found in delegation result:
   1. <url>  (<type> → <sub-agent>)
-  Depth: N/M — can follow more
+  URLs followed: N/M — can follow more
 
 For each reference you judge as relevant:
   1. Call follow_url(url) — returns success, already_followed, or depth_exceeded
@@ -111,19 +111,22 @@ If no references message is injected, there are no followable URLs — proceed t
 The `pause()` method sets `execution_status = PAUSED`, which causes `run()` to break at the top of its next iteration (checked under lock). `send_message()` enqueues a `MessageEvent`; on the next `run()` call, `_ensure_agent_ready()` re-validates state, then the loop immediately processes the queued message on the first `agent.step()`. This is exactly how the existing `_on_finish_callback` + `send_message` pattern works today.
 
 The `_pause_after_delegation_callback` is a closure that:
-- Guards with `isinstance(obs, DelegateObservation)` — no-op on every other event
-- On first fire: calls `conv.pause()`, then sets a flag so it doesn't fire again in the same depth segment
+- Guards with `isinstance(event, ObservationEvent) and isinstance(event.observation, DelegateObservation) and event.observation.command == "delegate"` — no-op on action events, spawn observations (`command == "spawn"`), and all other event types. Both `spawn` and `delegate` produce a `DelegateObservation`; excluding spawn prevents a spurious pause+run cycle after every agent spawn.
+- On first fire: calls `conv.pause()`, then sets a fired-flag so it doesn't fire again in the same depth segment
+- The fired-flag is reset before each subsequent `conv.run()` call to re-arm the callback for the next depth segment
+
+**`DelegateObservation` text extraction**: The callback and `_extract_last_delegate_observation` receive `Event` objects via `_on_event`. A delegation result arrives wrapped as `ObservationEvent(observation=DelegateObservation(...))`. Text content is extracted via `"".join(c.text for c in event.observation.to_llm_content if hasattr(c, "text"))`. The same `isinstance` + `command` guard used in the callback applies when scanning `conversation.state.events`.
 
 ## Risks / Trade-offs
 
-**[Risk] `run()` may not pause between steps if delegation and a subsequent tool call are batched in one agent step** → Mitigation: the SDK processes one action per step; `DelegateAction` produces `DelegateObservation` as its own step. The pause fires on the observation event, which is processed before the next step begins.
+**[Risk] Pause fires mid-`emit()` if multiple tool calls are batched in one LLM turn** → The SDK's `_ActionBatch.emit()` fires all observation callbacks in sequence after all tools in the batch have executed. Calling `pause()` from a callback during `emit()` sets PAUSED, but remaining callbacks in the same `emit()` loop still fire; the pause takes effect when `step()` returns and the `while True` loop checks status at its next iteration. In practice the orchestrator will not batch `delegate` with `follow_url` in the same LLM turn because `follow_url` is only called after receiving a delegation result — which arrives in the next turn. The risk is accepted as low.
 
 **[Risk] Orchestrator LLM ignores injected URL list and calls `classify_text` anyway** → Mitigation: `classify_text` is removed from the tool surface. The LLM cannot call a tool that doesn't exist. Prompt update makes the new flow explicit.
 
 **[Risk] Removing individual commands breaks existing tests** → Mitigation: update affected tests in the same PR.
 
-**[Risk] `DelegateObservation` content attribute changes in a future SDK update** → Mitigation: access `obs.to_llm_content` or `obs.content`; add a defensive check with a clear error if missing. Use the same attribute access pattern already present in `_extract_finish_action`.
+**[Risk] `DelegateObservation` content attribute changes in a future SDK update** → Mitigation: extract text via `event.observation.to_llm_content` (returns `Sequence[TextContent]`); join with `"".join(c.text for c in ... if hasattr(c, "text"))`. Add a defensive check with a clear error if the attribute is missing. Use the same attribute-access pattern already present in `_extract_finish_action`.
 
-**[Risk] Injected classification message slightly increases token count per depth** → Accepted trade-off: one ~200-token message per depth level is negligible against the ~182s / ~3.3M token saving.
+**[Risk] Injected classification message slightly increases token count per delegation round** → Accepted trade-off: one ~200-token message per delegation round is negligible against the ~182s / ~3.3M token saving.
 
 **[Trade-off] Depth loop adds complexity to `summarizer.py`** → The loop is straightforward (while not done: run, pause, classify, inject, run). The complexity is local to one function and well-motivated by performance data.

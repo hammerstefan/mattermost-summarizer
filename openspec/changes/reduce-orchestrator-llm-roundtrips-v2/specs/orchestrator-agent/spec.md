@@ -4,7 +4,7 @@
 The orchestrator agent SHALL follow a coordination loop driven by a Python depth loop in `summarizer.py`.
 
 The Python depth loop:
-1. Arms a `_pause_after_delegation_callback` that pauses `run()` on the first `DelegateObservation`
+1. Arms a `_pause_after_delegation_callback` that pauses `run()` on the first `delegate`-command `DelegateObservation` (guarded by `isinstance(event, ObservationEvent) and isinstance(event.observation, DelegateObservation) and event.observation.command == "delegate"`; excludes spawn observations)
 2. Calls `conv.run()` — runs until the first delegation completes, then pauses
 3. Extracts delegation result text from `conversation.state.events`
 4. Calls `classify_urls_in_text(text, tracker)` in Python
@@ -25,11 +25,10 @@ The orchestrator LLM:
 #### Scenario: Orchestrator completes without recursion
 - **WHEN** the root thread has no referenced URLs
 - **THEN** Python does not inject any URL message after the initial delegation
-- **THEN** the `_pause_after_delegation_callback` does not fire a second time
-- **THEN** `run()` continues to finish without further pausing
+- **THEN** `run()` continues to finish without further pausing (the callback's fired-flag prevents re-firing)
 - **THEN** orchestrator synthesizes only the root thread content and calls finish
 
-#### Scenario: Orchestrator completes after one recursion level
+#### Scenario: Orchestrator completes after following one URL
 - **WHEN** the root thread references a Launchpad bug
 - **THEN** Python pauses after thread_fetcher completes, injects the bug URL as a message
 - **THEN** orchestrator calls `follow_url(bug_url)` → success; delegates to bug_researcher
@@ -38,9 +37,19 @@ The orchestrator LLM:
 
 #### Scenario: Pause fires exactly once per delegation
 - **WHEN** the `_pause_after_delegation_callback` is armed for a depth segment
-- **THEN** it fires on the first `DelegateObservation` in that segment
-- **THEN** it does NOT fire again on subsequent events in the same segment
-- **THEN** it is re-armed before the next `conv.run()` call
+- **THEN** it fires only on `ObservationEvent` events where `event.observation` is a `DelegateObservation` with `event.observation.command == "delegate"`
+- **THEN** it does NOT fire on spawn observations (`command == "spawn"`) — those would cause a spurious pause+run cycle after every agent spawn
+- **THEN** it does NOT fire on action events or any other event types
+- **THEN** it does NOT fire again on subsequent events in the same segment (fired-flag is set after first fire)
+- **THEN** the fired-flag is reset before each subsequent `conv.run()` call to re-arm the callback
+
+#### Scenario: Orchestrator judges injected URLs as irrelevant and finishes directly
+- **WHEN** Python injects a classified URL list after a delegation
+- **AND** the orchestrator LLM judges all listed URLs as irrelevant to the discussion
+- **THEN** the orchestrator calls no `follow_url` and no further `delegate`
+- **THEN** the orchestrator calls `finish` with a summary drawn from gathered context
+- **THEN** the `_on_finish_callback` fires, `conv.pause()` is called, and the depth loop exits normally
+- **THEN** no `follow_url` or `depth_exceeded` outcomes are recorded
 
 ### Requirement: Orchestrator system prompt
 The orchestrator agent's system prompt SHALL instruct the agent to:

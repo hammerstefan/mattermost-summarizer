@@ -2,7 +2,7 @@
 
 The orchestrator agent spends 32% of its wall time (182s of 571s) on `track_references` tool calls that require no LLM judgment:
 
-1. **`classify_text` overhead**: The LLM calls `classify_text` with the full thread text (~44K chars) as a tool argument. The LLM echoes that text verbatim into its action output, permanently inflating the conversation context from ~10K to ~693K tokens and consuming ~3.3M input tokens over a session. URL classification is pure regex — no LLM judgment is involved.
+1. **`classify_text` overhead**: The LLM calls `classify_text` with the full thread text (~44K chars) as a tool argument. The LLM echoes that text verbatim into its action output, duplicating content already present as a `DelegateObservation` result and permanently inflating the conversation context from ~10K to ~693K tokens (~683K of duplicated content). This consumes ~3.3M input tokens over a session. URL classification is pure regex — no LLM judgment is involved.
 
 2. **4-step bookkeeping overhead**: The LLM executes `is_followed` → `can_follow` → `mark_followed` → `increment_depth` per URL (12 round-trips for 3 URLs) despite no LLM judgment occurring between steps. Combined with 2 `classify_text` calls, this totals ~14 wasted round-trips and ~182s.
 

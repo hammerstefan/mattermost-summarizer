@@ -9,14 +9,14 @@ The orchestrator:
 - SHALL stop delegating when `follow_url` returns `depth_exceeded`
 - SHALL skip URLs where `follow_url` returns `already_followed`
 
-#### Scenario: Recursion depth 1 (no recursion)
+#### Scenario: No URLs followed (depth budget intact)
 - **WHEN** the root thread contains no referenced URLs
 - **THEN** no classified URL message is injected after the initial delegation
 - **THEN** only thread_fetcher is delegated
 - **THEN** no further delegation rounds occur
 - **THEN** max_reference_depth is not exceeded
 
-#### Scenario: Recursion depth 2
+#### Scenario: One URL followed
 - **WHEN** the root thread references a Launchpad bug
 - **THEN** after thread_fetcher completes, Python classifies the result and injects a URL list message
 - **THEN** the orchestrator calls `follow_url` for the bug URL and receives `success`
@@ -24,14 +24,21 @@ The orchestrator:
 - **THEN** after bug_researcher completes, Python injects no further URLs (none found or depth exceeded)
 - **THEN** orchestrator synthesizes and calls finish
 
-#### Scenario: Recursion depth 3
+#### Scenario: Three URLs followed in a sequential chain
 - **WHEN** thread A references thread B, and thread B references thread C
-- **THEN** depth 1: thread_fetcher fetches thread A; Python injects thread B's URL
-- **THEN** orchestrator calls `follow_url(thread_B_url)` → success; delegates thread_fetcher for thread B
-- **THEN** depth 2: thread_fetcher fetches thread B; Python injects thread C's URL
-- **THEN** orchestrator calls `follow_url(thread_C_url)` → success; delegates thread_fetcher for thread C
-- **THEN** depth 3: thread_fetcher fetches thread C; Python injects no further URLs (depth limit reached or no new URLs)
+- **THEN** `follow_url(thread_A→B_url)` → success; delegates thread_fetcher for thread B; depth=1
+- **THEN** thread_fetcher fetches thread B; Python injects thread C's URL
+- **THEN** `follow_url(thread_B→C_url)` → success; delegates thread_fetcher for thread C; depth=2
+- **THEN** thread_fetcher fetches thread C; Python injects no further URLs (depth limit reached or no new URLs)
 - **THEN** orchestrator synthesizes and calls finish
+
+#### Scenario: Multiple URLs at the same level exhaust depth budget
+- **WHEN** the root thread references a Launchpad bug, a GitHub PR, and a Mattermost permalink (3 URLs at the same level) and `max_depth=3`
+- **THEN** `follow_url(bug_url)` → success (depth=1), `follow_url(pr_url)` → success (depth=2), `follow_url(thread_url)` → success (depth=3)
+- **THEN** any further `follow_url` calls return `depth_exceeded`
+- **THEN** the 3 sub-agents are delegated; no further reference following occurs
+
+> **Note on depth semantics**: `follow_url` increments depth once per successful call. With single-URL chains, depth and recursion level happen to coincide. With multiple URLs at the same level, depth counts total URLs followed. See `atomic-url-follow` spec for the full definition.
 
 ## MODIFIED Requirements
 
@@ -53,7 +60,7 @@ The injected message SHALL use the format:
 References found in delegation result:
 1. <url>  (<type> → <sub-agent>)
 2. <url>  (<type> → <sub-agent>)
-Depth: N/M — can follow more
+URLs followed: N/M — can follow more
 
 Decide which (if any) are relevant and call follow_url before delegating.
 ```

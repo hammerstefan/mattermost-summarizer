@@ -32,6 +32,13 @@ The operation SHALL execute under the tracker lock to prevent TOCTOU races in co
 - **THEN** exactly one returns `success` and one returns `already_followed`
 - **THEN** depth is incremented exactly once
 
+#### Note: Depth counts total URLs followed, not recursion levels
+`follow_url` increments depth once per successful call, regardless of how many URLs are followed at the same recursion level. This matches the existing 4-step protocol's behaviour and is intentional: `max_reference_depth` limits total context-gathering work, not nesting depth.
+
+With `max_depth=3`, following 3 URLs at depth 0 will exhaust the depth budget after the third `follow_url` call, returning `depth_exceeded` for any further URLs.
+
+If per-level semantics are desired in the future, `increment_depth` should be decoupled from `follow_url` and called once by the Python depth loop after all same-level delegations complete — but that is out of scope for this change.
+
 ## REMOVED Requirements
 
 ### Requirement: Individual bookkeeping commands

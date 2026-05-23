@@ -8,11 +8,11 @@
 
 ## 2. Python depth loop in summarizer.py
 
-- [ ] 2.1 Add `_pause_after_delegation_callback` factory function (returns a closure) in `summarizer.py` — guards on `DelegateObservation`, calls `conv.pause()` once, sets a fired-flag
+- [ ] 2.1 Add `_pause_after_delegation_callback` factory function (returns a closure) in `summarizer.py` — guards on `isinstance(event, ObservationEvent) and isinstance(event.observation, DelegateObservation) and event.observation.command == "delegate"` (not `"spawn"`, which also produces a `DelegateObservation`); calls `conv.pause()` once; sets a fired-flag that is reset before each `conv.run()` call to re-arm for the next depth segment
 - [ ] 2.2 Replace the single `conversation.run()` call in `MattermostSummarizer.summarize()` with a `_run_depth_loop()` helper that iterates: arm callback → `run()` → extract last `DelegateObservation` text → classify URLs → inject message if any → repeat until finish or no new URLs
-- [ ] 2.3 Implement `_extract_last_delegate_observation(conversation)` helper — scans `conversation.state.events` in reverse for the most recent `DelegateObservation` and returns its text content
+- [ ] 2.3 Implement `_extract_last_delegate_observation(conversation)` helper — scans `conversation.state.events` in reverse for the most recent `ObservationEvent` where `isinstance(event.observation, DelegateObservation)` and `event.observation.command == "delegate"`; extracts text as `"".join(c.text for c in event.observation.to_llm_content if hasattr(c, "text"))` (same pattern as `_extract_finish_action`)
 - [ ] 2.4 Implement `_format_url_injection_message(classified_urls, tracker)` helper — formats the classified URL list message with depth info
-- [ ] 2.5 Wire `ReferenceTracker` instance into `summarizer.py` so it is shared between the depth loop and `ReferenceTrackingExecutor` (pass tracker to `build_orchestrator_agent` or construct it in `summarize()` and pass it through)
+- [ ] 2.5 Construct `ReferenceTracker(max_depth=max_reference_depth)` in `MattermostSummarizer.summarize()` and pass it to `build_orchestrator_agent()` as a new `tracker` keyword argument; update `build_orchestrator_agent` signature to accept and forward it to `ReferenceTrackingTool.create(tracker)`. This gives the depth loop direct access to the same tracker instance used by `ReferenceTrackingExecutor`.
 
 ## 3. Orchestrator prompt update
 
