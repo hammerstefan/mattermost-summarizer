@@ -32,9 +32,9 @@ The `track_references` tool SHALL provide a `follow_url` command that atomically
 ### Requirement: Automatic post-delegation URL classification injection
 After each delegation completes, the system SHALL automatically inject a message into the orchestrator conversation listing all classified followable URLs found in the delegation result, without requiring the orchestrator to call any classification tool.
 
-- The injection SHALL occur in a post-delegation callback registered at `LocalConversation` construction time
+- The injection SHALL occur via a post-delegation callback registered at `LocalConversation` construction time in `summarizer.py`
 - The callback SHALL call `classify_urls_in_text()` on the delegation observation content
-- The callback SHALL format the classified URLs as a user message and send it to the conversation
+- The callback SHALL format the classified URLs as a user message and call `send_message()` on the conversation
 - The callback SHALL NOT inject a message if no followable URLs are found
 - `DelegateTool` SHALL remain unchanged
 
@@ -42,6 +42,7 @@ After each delegation completes, the system SHALL automatically inject a message
 - **WHEN** a delegation completes and the observation content contains GitHub/Launchpad/Mattermost URLs
 - **THEN** a message is automatically appended to the orchestrator conversation
 - **THEN** the message lists each classified URL with its type and target sub-agent
+- **THEN** the message includes current depth and whether further following is permitted
 - **THEN** the orchestrator can use this list to decide which URLs to follow via `follow_url`
 
 #### Scenario: Delegation returns content with no followable URLs
