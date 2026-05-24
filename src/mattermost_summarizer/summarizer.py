@@ -129,14 +129,25 @@ class MattermostSummarizer:
                     level=level,
                 )
 
-            tracker = ReferenceTracker(max_depth=self.config.max_reference_depth)
+            _DEPTH_BY_LEVEL: dict[SummaryLevel, int] = {
+                SummaryLevel.BRIEF: 0,
+                SummaryLevel.NORMAL: 1,
+                SummaryLevel.DETAILED: 3,
+            }
+            effective_depth = (
+                self.config.max_reference_depth
+                if self.config.max_reference_depth is not None
+                else _DEPTH_BY_LEVEL[level]
+            )
+
+            tracker = ReferenceTracker(max_depth=effective_depth)
 
             agent = build_orchestrator_agent(
                 llm_model=self.config.llm_model,
                 llm_api_key=self.config.llm_api_key.get_secret_value(),
                 llm_base_url=self.config.llm_base_url,
                 level=level,
-                max_reference_depth=self.config.max_reference_depth,
+                max_reference_depth=effective_depth,
                 max_sub_agents=self.config.max_sub_agents,
                 critic=critic,
                 tracker=tracker,

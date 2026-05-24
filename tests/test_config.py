@@ -29,7 +29,7 @@ class TestConfigEnvVarLoading:
         assert str(config.mattermost_url) == "https://chat.example.com/"
         assert config.llm_model == "openai/gpt-4o"
         assert config.llm_base_url is None
-        assert config.max_reference_depth == 3
+        assert config.max_reference_depth is None
         assert config.critic_enabled is True
         assert config.critic_threshold == 0.7
         assert config.critic_max_iterations == 2

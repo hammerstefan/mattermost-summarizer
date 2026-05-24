@@ -69,9 +69,13 @@ class MattermostSummarizerConfig(BaseSettings):
         default=SummaryLevel.NORMAL,
         description="Default summarization level (brief, normal, or detailed)",
     )
-    max_reference_depth: int = Field(
-        default=3,
-        description="Maximum recursion depth for following referenced URLs (0=disabled, default: 3)",
+    max_reference_depth: int | None = Field(
+        default=None,
+        description=(
+            "Maximum recursion depth for following referenced URLs (0=disabled). "
+            "If not set, defaults dynamically based on the summary level: "
+            "brief=0, normal=1, detailed=3."
+        ),
     )
     critic_enabled: bool = Field(
         default=True,
