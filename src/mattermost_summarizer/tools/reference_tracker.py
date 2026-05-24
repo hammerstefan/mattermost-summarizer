@@ -37,18 +37,24 @@ class ClassifiedUrl:
 class ReferenceTracker:
     """Tracks followed references and depth for recursive following.
 
-    All public methods are individually thread-safe.  For compound
-    check-then-act operations (e.g. ``can_follow_deeper`` → ``mark_followed``)
-    use the :meth:`lock` context manager to hold the internal lock across the
-    entire compound operation:
+    Depth is tracked per-URL rather than globally.  Siblings discovered in the
+    same References block share the same depth level, so ``max_depth=3`` allows
+    e.g. 6 sibling URLs at depth 1 each surfacing sub-references at depth 2.
 
-        with tracker.lock:
-            if tracker.can_follow_deeper():
-                tracker.mark_followed(url)
+    Lifecycle per URL:
+      1. ``register_pending(url, depth)``  — called at injection time for each
+         URL surfaced by a sub-agent, before the orchestrator sees the block.
+      2. ``get_depth_for(url)``            — called by the executor just before
+         delegating; returns the pre-registered depth (or ``None`` for root).
+      3. ``mark_followed(url, depth)``     — called after delegation completes;
+         moves the URL from ``pending_urls`` into ``followed_urls``.
+
+    All public methods are individually thread-safe.  Use the :meth:`lock`
+    context manager for compound check-then-act operations.
     """
 
-    followed_urls: set[str] = field(default_factory=lambda: set())
-    current_depth: int = 0
+    followed_urls: dict[str, int] = field(default_factory=lambda: {})
+    pending_urls: dict[str, int] = field(default_factory=lambda: {})
     max_depth: int = 3
     _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
 
@@ -63,26 +69,39 @@ class ReferenceTracker:
         with self._lock:
             return url in self.followed_urls
 
-    def mark_followed(self, url: str) -> None:
-        """Mark a URL as followed."""
-        with self._lock:
-            self.followed_urls.add(url)
+    def register_pending(self, url: str, depth: int) -> None:
+        """Register a URL as pending with its expected fetch depth.
 
-    def can_follow_deeper(self) -> bool:
-        """Check if we can follow another level of references."""
+        Called at injection time (when building the References block) for each
+        followable URL discovered in a sub-agent result.
+        """
         with self._lock:
-            return self.current_depth < self.max_depth
+            self.pending_urls[url] = depth
 
-    def increment_depth(self) -> None:
-        """Increment the depth counter."""
+    def get_depth_for(self, url: str) -> int | None:
+        """Return the depth assigned to *url*, or ``None`` if unregistered (root).
+
+        Checks ``pending_urls`` first (not yet fetched), then ``followed_urls``
+        (already fetched — useful for trace introspection).
+        """
         with self._lock:
-            self.current_depth += 1
+            if url in self.pending_urls:
+                return self.pending_urls[url]
+            if url in self.followed_urls:
+                return self.followed_urls[url]
+            return None
+
+    def mark_followed(self, url: str, depth: int) -> None:
+        """Mark a URL as followed at *depth*, removing it from pending."""
+        with self._lock:
+            self.pending_urls.pop(url, None)
+            self.followed_urls[url] = depth
 
     def reset(self) -> None:
         """Reset tracker state for a new summary operation."""
         with self._lock:
             self.followed_urls.clear()
-            self.current_depth = 0
+            self.pending_urls.clear()
 
 
 MATTERMOST_THREAD_PATTERNS = [
@@ -261,18 +280,27 @@ def classify_urls_in_text(text: str, tracker: ReferenceTracker | None = None) ->
 def build_reference_following_prompt(
     classified_urls: list[ClassifiedUrl],
     tracker: ReferenceTracker,
+    parent_depth: int = 0,
+    context_sentences: dict[str, str] | None = None,
 ) -> str:
     """Build a prompt for the orchestrator about found references.
 
     Args:
         classified_urls: List of classified URLs found in content
         tracker: Reference tracker for depth info
+        parent_depth: The depth at which the parent was fetched (child URLs
+            will be at parent_depth + 1)
+        context_sentences: Optional mapping of url → one-sentence description
+            extracted from the sub-agent result text
 
     Returns:
         Formatted prompt string
     """
     if not classified_urls:
         return "No additional references found in the content."
+
+    child_depth = parent_depth + 1
+    context_sentences = context_sentences or {}
 
     lines = ["Found the following references in the content:\n"]
 
@@ -284,16 +312,95 @@ def build_reference_following_prompt(
             "file_fetcher": "Mattermost file",
         }.get(ref.agent_type, ref.agent_type)
 
-        lines.append(f"{i}. {ref.url} ({agent_desc})")
+        ctx = context_sentences.get(ref.url, "")
+        if ctx:
+            lines.append(f"{i}. {ref.url} ({agent_desc}) — {ctx}")
+        else:
+            lines.append(f"{i}. {ref.url} ({agent_desc})")
 
-    lines.append(f"\nCurrent depth: {tracker.current_depth}/{tracker.max_depth}")
-
-    if tracker.can_follow_deeper():
-        lines.append("You may delegate to appropriate sub-agents to fetch additional context.")
+    if child_depth < tracker.max_depth:
+        lines.append(f"\nDepth: {child_depth}/{tracker.max_depth}")
+        lines.append("You may call fetch_reference on the above URLs to fetch additional context.")
     else:
-        lines.append("Maximum reference depth reached. Do not follow further references.")
+        lines.append(
+            f"\nDepth: {child_depth}/{tracker.max_depth}"
+            " — Maximum reference depth reached. Do not follow further references."
+        )
 
     return "\n".join(lines)
+
+
+def extract_sentence_context(text: str, url: str) -> str:
+    """Extract a one-sentence description surrounding *url* from *text*.
+
+    Strategy (in priority order):
+    1. If the URL is in the middle of a sentence — return that sentence.
+    2. If the URL starts a sentence — return that sentence.
+    3. If the URL is on its own line and the previous line has text — return
+       the previous line (treated as a description heading).
+    4. Fallback — return ``"(no description available)"`` if no sentence
+       boundary is found within 300 characters of the URL.
+
+    The returned string has the URL itself stripped out to avoid duplication
+    in the References block.
+    """
+    url_pos = text.find(url)
+    if url_pos == -1:
+        return "(no description available)"
+
+    # Sentence-ending characters
+    sent_end = re.compile(r"[.!?]\s")
+
+    window_start = max(0, url_pos - 300)
+    window_end = min(len(text), url_pos + len(url) + 300)
+    window = text[window_start:window_end]
+    url_in_window = url_pos - window_start
+
+    # Find the sentence that contains the URL within the window
+    # Walk backwards from url_pos to find sentence start
+    before = window[:url_in_window]
+    after = window[url_in_window + len(url) :]
+
+    # Find start of current sentence (last .  !  ? in `before`)
+    sent_start_match = None
+    for m in sent_end.finditer(before):
+        sent_start_match = m
+    if sent_start_match:
+        sent_start_pos = sent_start_match.end()
+    else:
+        # No sentence boundary before URL — use start of current line
+        line_start = before.rfind("\n")
+        sent_start_pos = line_start + 1 if line_start != -1 else 0
+
+    # Find end of current sentence (first .  !  ? in `after`)
+    sent_end_match = sent_end.search(after)
+    if sent_end_match:
+        sent_end_in_after = sent_end_match.end()
+    else:
+        # No sentence boundary after URL — try newline
+        nl = after.find("\n")
+        sent_end_in_after = nl if nl != -1 else len(after)
+
+    sentence = before[sent_start_pos:] + url + after[:sent_end_in_after]
+    sentence = sentence.strip()
+
+    # If the extracted sentence is just the URL itself or very short,
+    # try the previous line as a description
+    stripped = sentence.replace(url, "").strip().rstrip(".!?,;:")
+    if len(stripped) < 5:
+        prev_line_end = before.rfind("\n")
+        if prev_line_end != -1:
+            prev_line_start = before.rfind("\n", 0, prev_line_end)
+            prev_line = before[prev_line_start + 1 : prev_line_end].strip()
+            if len(prev_line) >= 5:
+                return prev_line
+        return "(no description available)"
+
+    # Strip the URL from the returned context to avoid duplication
+    result = sentence.replace(url, "").strip().rstrip(".!?,;:").strip()
+    if len(result) < 5:
+        return "(no description available)"
+    return result
 
 
 __all__ = [
@@ -307,4 +414,5 @@ __all__ = [
     "extract_urls_from_text",
     "classify_urls_in_text",
     "build_reference_following_prompt",
+    "extract_sentence_context",
 ]

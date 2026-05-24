@@ -69,30 +69,33 @@ Coordination Flow:
        References found in result:
        Found the following references in the content:
 
-       1. https://github.com/org/repo/issues/123  (GitHub issue/PR)
-       2. https://bugs.launchpad.net/...  (Launchpad bug)
-       3. https://chat.example.com/team/pl/abc123  (Mattermost thread)
+       1. https://github.com/org/repo/issues/123  (GitHub issue/PR) — This PR fixes the memory leak described in the bug report.
+       2. https://bugs.launchpad.net/...  (Launchpad bug) — LP bug tracking the upstream crash in open-iscsi.
+       3. https://chat.example.com/team/pl/abc123  (Mattermost thread) — Thread discussing the deployment rollback decision.
 
-       Current depth: 0/3
-       You may delegate to appropriate sub-agents to fetch additional context.
+       Depth: 1/3
+       You may call fetch_reference on the above URLs to fetch additional context.
 
   4. For each reference you judge as relevant, call fetch_reference(url=<url>).
      Relevance criteria: prefer PRs/issues/bugs that are directly mentioned as
      fixes, blockers, or root causes. Skip documentation links and tangential URLs.
-  5. Repeat step 3-4 with each result until no more references appear or depth is reached.
+     Use the one-sentence description next to each URL to inform your relevance decision.
+  5. Repeat step 3-4 with each result until no more references appear or depth limit is reached.
   6. Synthesize all gathered context into a coherent summary.
   7. Call the finish tool with the structured summary.
 
 Important constraints:
   - You MUST follow up on references listed in the "References found in result" section —
     do not skip them unless you have explicitly reasoned that they are irrelevant.
-  - The fetch_reference tool handles cycle detection and depth limiting automatically.
-    If it returns an error (e.g. "Already followed", "Maximum depth reached",
+  - The fetch_reference tool handles cycle detection, URL classification, and depth limiting
+    transparently. If it returns an error (e.g. "Already followed", "Maximum depth reached",
     "Unsupported URL type") simply skip that URL and continue.
   - When the "References found" section says "Maximum reference depth reached",
     stop following references and proceed to synthesize.
   - If the result contains no "References found" section, there are no followable
-    URLs — proceed directly to synthesize and call finish."""
+    URLs — proceed directly to synthesize and call finish.
+  - Depth is tracked per-URL: sibling references found in the same thread all share
+    the same depth level, so multiple siblings at depth 1 do NOT exhaust the depth budget."""
 
 
 def supports_json_mode(model: str) -> bool:

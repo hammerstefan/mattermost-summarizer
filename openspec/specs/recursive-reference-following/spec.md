@@ -7,84 +7,98 @@ Follow referenced URLs (Mattermost permalinks, Launchpad bugs, GitHub issues, fi
 ## Requirements
 
 ### Requirement: Recursive reference following
-The system SHALL follow referenced URLs recursively up to a configurable depth.
+The system SHALL follow referenced URLs recursively up to a configurable depth. Depth represents the nesting level in the reference chain — siblings found in the same result share the same depth.
 
-The orchestrator:
-- SHALL receive classified URLs automatically as an injected user message after each delegation round — Python performs classification between `run()` segments; no LLM tool call is needed
-- SHALL use `follow_url(url)` to register a URL as followed before delegating to the corresponding sub-agent
-- SHALL stop delegating when `follow_url` returns `depth_exceeded`
-- SHALL skip URLs where `follow_url` returns `already_followed`
+The `FetchReferenceExecutor`, upon completing a sub-agent delegation at depth N, SHALL pre-register each followable URL found in the result at depth N+1 on the `ReferenceTracker`. When the executor processes a new `fetch_reference` call, it SHALL look up the URL's registered depth from the tracker and check it against `max_depth`. The root URL (not found in any result) is assigned depth 0.
+
+The `ReferenceTracker`:
+- SHALL store `followed_urls: dict[str, int]` mapping each fetched URL to the depth it was fetched at
+- SHALL store `pending_urls: dict[str, int]` mapping URLs surfaced in the most recent References block to their child depth
+- SHALL provide `register_pending(url: str, depth: int)` for the executor to register URLs at injection time
+- SHALL provide `get_depth_for(url: str) -> int | None` returning the registered depth (from pending or followed), or `None` for unregistered URLs (interpreted as depth 0 by the executor)
+- SHALL provide `mark_followed(url: str, depth: int)` recording a URL as followed at the given depth
+- SHALL NOT have a `current_depth: int` field or `increment_depth()` method
 
 #### Scenario: No URLs followed (depth budget intact)
-- **WHEN** the root thread contains no referenced URLs
-- **THEN** no classified URL message is injected after the initial delegation
-- **THEN** only thread_fetcher is delegated
-- **THEN** no further delegation rounds occur
-- **THEN** max_reference_depth is not exceeded
+- **WHEN** the root thread result contains no followable URLs
+- **THEN** no References block is appended
+- **THEN** the orchestrator receives only the sub-agent result text
+- **THEN** only the root thread is fetched
 
 #### Scenario: One URL followed
-- **WHEN** the root thread references a Launchpad bug
-- **THEN** after thread_fetcher completes, Python classifies the result and injects a URL list message
-- **THEN** the orchestrator calls `follow_url` for the bug URL and receives `success`
-- **THEN** the orchestrator delegates to bug_researcher
-- **THEN** after bug_researcher completes, Python injects no further URLs (none found or depth exceeded)
-- **THEN** orchestrator synthesizes and calls finish
+- **WHEN** the root thread result references a Launchpad bug
+- **THEN** the References block lists the LP bug URL at depth 1
+- **THEN** the orchestrator calls `fetch_reference` for the bug URL
+- **THEN** the executor registers the LP bug at depth 1 in `followed_urls`
+- **THEN** after bug_researcher completes, no further URLs are surfaced (or all are at depth 2, which requires another `fetch_reference` call)
+- **THEN** the orchestrator synthesizes and calls finish
 
-#### Scenario: Three URLs followed in a sequential chain
-- **WHEN** thread A references thread B, and thread B references thread C
-- **THEN** `follow_url(thread_A→B_url)` → success; delegates thread_fetcher for thread B; depth=1
-- **THEN** thread_fetcher fetches thread B; Python injects thread C's URL
-- **THEN** `follow_url(thread_B→C_url)` → success; delegates thread_fetcher for thread C; depth=2
-- **THEN** thread_fetcher fetches thread C; Python injects no further URLs (depth limit reached or no new URLs)
-- **THEN** orchestrator synthesizes and calls finish
+#### Scenario: Three levels of nesting (chain)
+- **WHEN** thread A's result surfaces thread B's URL (depth 1)
+- **AND** thread B's result surfaces thread C's URL (depth 2)
+- **AND** thread C's result surfaces thread D's URL (depth 3)
+- **AND** `max_depth=3`
+- **THEN** `fetch_reference(thread_D)` succeeds (depth 3)
+- **THEN** `fetch_reference` for depth 4 URLs (surfaced from thread D) returns a depth-exceeded error
+- **THEN** the orchestrator synthesizes and calls finish
 
-#### Scenario: Multiple URLs at the same level exhaust depth budget
-- **WHEN** the root thread references a Launchpad bug, a GitHub PR, and a Mattermost permalink (3 URLs at the same level) and `max_depth=3`
-- **THEN** `follow_url(bug_url)` → success (depth=1), `follow_url(pr_url)` → success (depth=2), `follow_url(thread_url)` → success (depth=3)
-- **THEN** any further `follow_url` calls return `depth_exceeded`
-- **THEN** the 3 sub-agents are delegated; no further reference following occurs
+#### Scenario: Multiple siblings at the same depth do not compete
+- **WHEN** the root thread result surfaces 6 followable GitHub URLs at depth 1
+- **THEN** all 6 calls to `fetch_reference` succeed because siblings share depth 1
+- **THEN** each URL is registered at depth 1 in `followed_urls`
+- **THEN** `max_depth` is not exceeded by sibling count alone
 
-> **Note on depth semantics**: `follow_url` increments depth once per successful call. With single-URL chains, depth and recursion level happen to coincide. With multiple URLs at the same level, depth counts total URLs followed. See `atomic-url-follow` spec for the full definition.
+#### Scenario: Already-followed URL is not re-fetched
+- **WHEN** the orchestrator calls `fetch_reference(url)` for a URL already present in `followed_urls`
+- **THEN** the executor returns an error observation with "URL has already been followed"
+- **THEN** no sub-agent is spawned
 
 ### Requirement: URL classification for delegation routing
-Python SHALL classify found URLs after each delegation round and inject the classified list as a user message before the orchestrator's next LLM step.
+Python SHALL classify URLs found in sub-agent result text and list them in a "References found in result" block appended to the result. Each URL entry SHALL include:
 
-Classification rules:
+- The URL and its classified type (e.g. "GitHub issue/PR", "Launchpad bug")
+- One sentence of surrounding context extracted from the result text (without the URL itself)
 
-| URL Pattern | Sub-agent |
-|-------------|----------|
-| `chat.{server}/{team}/pl/{post_id}` | thread_fetcher |
-| `bugs.launchpad.net/.../+bug/{id}` | bug_researcher |
-| `github.com/{owner}/{repo}/issues/{id}` | github_researcher |
-| `github.com/{owner}/{repo}/pull/{id}` | github_researcher |
-| Mattermost file IDs | file_fetcher |
+The injected block SHALL use the format:
 
-The injected message SHALL use the format:
 ```
-References found in delegation result:
-1. <url>  (<type> → <sub-agent>)
-2. <url>  (<type> → <sub-agent>)
-URLs followed: N/M — can follow more
+---
+References found in result:
+Found the following references in the content:
 
-Decide which (if any) are relevant and call follow_url before delegating.
+1. <url> (<type>) — <context sentence>
+2. <url> (<type>) — <context sentence>
+
+Current depth: <N>/<max>
+You may delegate to appropriate sub-agents to fetch additional context.
 ```
 
-If no followable URLs are found, no message is injected and `run()` continues without pausing.
+If no followable URLs are found, no block is appended and the result is returned as-is.
+
+Classification rules (unchanged):
+
+| URL Pattern | Type |
+|---|---|
+| `chat.{server}/{team}/pl/{post_id}` | Mattermost thread |
+| `bugs.launchpad.net/.../+bug/{id}` | Launchpad bug |
+| `github.com/{owner}/{repo}/issues/{id}` | GitHub issue/PR |
+| `github.com/{owner}/{repo}/pull/{id}` | GitHub issue/PR |
+| Mattermost file IDs | Mattermost file |
 
 #### Scenario: Classification routes to correct sub-agent
-- **WHEN** Python extracts a URL `https://bugs.launchpad.net/ubuntu/+bug/12345` from delegation result
-- **THEN** it classifies as `launchpad_bug → bug_researcher`
-- **THEN** the injected message lists the URL with its type and target sub-agent
+- **WHEN** the result text contains a URL `https://bugs.launchpad.net/ubuntu/+bug/12345`
+- **THEN** it is classified as `launchpad_bug` and listed in the References block with type "Launchpad bug"
+- **THEN** the orchestrator calls `fetch_reference` for the URL
 
 #### Scenario: Multiple URL types in same thread
 - **WHEN** thread content contains a GitHub PR URL, a Launchpad bug URL, and a Mattermost permalink
-- **THEN** Python classifies all three and injects a single message listing all three with types
-- **THEN** the orchestrator decides which are relevant and calls `follow_url` for each chosen URL
+- **THEN** all three are classified and listed in a single References block with context sentences
+- **THEN** the orchestrator decides which are relevant and calls `fetch_reference` for each chosen URL
 
 #### Scenario: No followable URLs found
 - **WHEN** the delegation result contains no URLs matching any known pattern
-- **THEN** Python does NOT inject any message
-- **THEN** `run()` continues without pausing for URL injection
+- **THEN** no References block is appended
+- **THEN** the raw result text is returned to the orchestrator
 
 ### Requirement: LLM-driven reference selection
 The orchestrator SHALL decide which references to follow based on their relevance to the discussion, not following all references indiscriminately.

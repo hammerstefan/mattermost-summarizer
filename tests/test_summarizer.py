@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from mattermost_summarizer.levels import (
     BriefFinishAction,
@@ -12,10 +12,7 @@ from mattermost_summarizer.levels import (
     SummarizerFinishActionBase,
 )
 from mattermost_summarizer.summarizer import (
-    _PauseAfterDelegationCallback,
     _extract_finish_action,
-    _extract_last_delegate_observation,
-    _make_pause_after_delegation_callback,
 )
 
 
@@ -183,7 +180,6 @@ class TestExtractFinishAction:
         assert result is None
 
     def test_extract_returns_none_when_no_state(self) -> None:
-        from unittest.mock import MagicMock
 
         conv = MagicMock(spec=[])
         conv.state = None
@@ -347,178 +343,3 @@ class _FakeActionEvent:
 
     def __init__(self, action: Any = None) -> None:
         self.action = action
-
-
-# ---------------------------------------------------------------------------
-# Tests for _PauseAfterDelegationCallback / _make_pause_after_delegation_callback
-# ---------------------------------------------------------------------------
-
-
-class TestPauseAfterDelegationCallback:
-    """Tests for _PauseAfterDelegationCallback (task 4.3)."""
-
-    def _make(self) -> tuple[_PauseAfterDelegationCallback, MagicMock, list]:
-        """Return (callback, mock_conv, conv_ref)."""
-        mock_conv = MagicMock()
-        mock_conv.pause = MagicMock()
-        conv_ref: list[Any] = [mock_conv]
-        cb = _make_pause_after_delegation_callback(conv_ref)
-        return cb, mock_conv, conv_ref
-
-    def _make_delegate_event(self, command: str = "delegate") -> _FakeObservationEvent:
-        obs = _FakeDelegateObservation(command=command)
-        return _FakeObservationEvent(obs)
-
-    def _patch_isinstance(self):
-        """Patch isinstance checks in summarizer so our fakes pass them."""
-        import mattermost_summarizer.summarizer as mod
-
-        obs_event_patch = patch.object(mod, "ObservationEvent", _FakeObservationEvent)
-        delegate_obs_patch = patch.object(mod, "DelegateObservation", _FakeDelegateObservation)
-        return obs_event_patch, delegate_obs_patch
-
-    def test_fires_on_delegate_command(self) -> None:
-        cb, mock_conv, _ = self._make()
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            cb.callback(self._make_delegate_event("delegate"))
-        mock_conv.pause.assert_called_once()
-
-    def test_does_not_fire_on_spawn_command(self) -> None:
-        cb, mock_conv, _ = self._make()
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            cb.callback(self._make_delegate_event("spawn"))
-        mock_conv.pause.assert_not_called()
-
-    def test_does_not_fire_on_non_observation_event(self) -> None:
-        cb, mock_conv, _ = self._make()
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            cb.callback(_FakeActionEvent())
-        mock_conv.pause.assert_not_called()
-
-    def test_does_not_fire_on_non_delegate_observation(self) -> None:
-        cb, mock_conv, _ = self._make()
-        p1, p2 = self._patch_isinstance()
-        other_obs = _FakeOtherObservation()
-        with p1, p2:
-            cb.callback(_FakeObservationEvent(other_obs))
-        mock_conv.pause.assert_not_called()
-
-    def test_fires_only_once_per_segment(self) -> None:
-        cb, mock_conv, _ = self._make()
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            cb.callback(self._make_delegate_event("delegate"))
-            cb.callback(self._make_delegate_event("delegate"))  # second call — must be no-op
-        assert mock_conv.pause.call_count == 1
-
-    def test_reset_rearms_callback(self) -> None:
-        cb, mock_conv, _ = self._make()
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            cb.callback(self._make_delegate_event("delegate"))
-            cb.reset()
-            cb.callback(self._make_delegate_event("delegate"))  # re-armed — must fire again
-        assert mock_conv.pause.call_count == 2
-
-    def test_does_nothing_when_conv_ref_is_none(self) -> None:
-        cb = _make_pause_after_delegation_callback([None])
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            # Must not raise even when conv_ref[0] is None
-            cb.callback(self._make_delegate_event("delegate"))
-
-
-# ---------------------------------------------------------------------------
-# Tests for _extract_last_delegate_observation
-# ---------------------------------------------------------------------------
-
-
-class TestExtractLastDelegateObservation:
-    """Tests for _extract_last_delegate_observation() (task 4.4)."""
-
-    def _conv(self, events: list[Any]) -> MagicMock:
-        conv = MagicMock()
-        conv.state = MagicMock()
-        conv.state.events = events
-        return conv
-
-    def _patch_isinstance(self):
-        import mattermost_summarizer.summarizer as mod
-
-        obs_event_patch = patch.object(mod, "ObservationEvent", _FakeObservationEvent)
-        delegate_obs_patch = patch.object(mod, "DelegateObservation", _FakeDelegateObservation)
-        return obs_event_patch, delegate_obs_patch
-
-    def _obs_event(self, command: str = "delegate", text: str = "") -> _FakeObservationEvent:
-        return _FakeObservationEvent(_FakeDelegateObservation(command=command, content_text=text))
-
-    def test_returns_none_when_no_events(self) -> None:
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            result = _extract_last_delegate_observation(self._conv([]))
-        assert result is None
-
-    def test_returns_none_when_no_state(self) -> None:
-        conv = MagicMock()
-        conv.state = None
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            result = _extract_last_delegate_observation(conv)
-        assert result is None
-
-    def test_returns_text_from_delegate_observation(self) -> None:
-        events = [self._obs_event("delegate", "thread content here")]
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            result = _extract_last_delegate_observation(self._conv(events))
-        assert result == "thread content here"
-
-    def test_ignores_spawn_observations(self) -> None:
-        events = [self._obs_event("spawn", "spawn text")]
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            result = _extract_last_delegate_observation(self._conv(events))
-        assert result is None
-
-    def test_returns_most_recent_delegate_observation(self) -> None:
-        events = [
-            self._obs_event("delegate", "first"),
-            self._obs_event("delegate", "second"),
-        ]
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            result = _extract_last_delegate_observation(self._conv(events))
-        assert result == "second"
-
-    def test_skips_non_observation_events(self) -> None:
-        events = [
-            _FakeActionEvent(),
-            self._obs_event("delegate", "found"),
-        ]
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            result = _extract_last_delegate_observation(self._conv(events))
-        assert result == "found"
-
-    def test_uses_hasattr_not_type_check_for_text(self) -> None:
-        """Content items without a .text attribute are silently skipped."""
-
-        class _NoText:
-            pass
-
-        class _WithText:
-            text = "hello"
-
-        class _OddObservation(_FakeDelegateObservation):
-            @property
-            def to_llm_content(self) -> list[Any]:
-                return [_NoText(), _WithText()]
-
-        events = [_FakeObservationEvent(_OddObservation("delegate"))]
-        p1, p2 = self._patch_isinstance()
-        with p1, p2:
-            result = _extract_last_delegate_observation(self._conv(events))
-        assert result == "hello"

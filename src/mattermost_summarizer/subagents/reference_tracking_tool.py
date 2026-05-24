@@ -78,24 +78,26 @@ class ReferenceTrackingExecutor(ToolExecutor[ReferenceTrackingAction, ReferenceT
                         outcome="already_followed",
                         result="URL has already been followed",
                     )
-                if not self._tracker.can_follow_deeper():
+                # Per-URL depth: look up registered depth (root URLs have None → 0)
+                url_depth = self._tracker.get_depth_for(action.url)
+                effective_depth = url_depth if url_depth is not None else 0
+                if effective_depth >= self._tracker.max_depth:
                     return ReferenceTrackingObservation(
                         command=cmd,
                         url=action.url,
                         outcome="depth_exceeded",
-                        current_depth=self._tracker.current_depth,
+                        current_depth=effective_depth,
                         max_depth=self._tracker.max_depth,
                         result=f"Maximum depth ({self._tracker.max_depth}) reached",
                     )
-                self._tracker.mark_followed(action.url)
-                self._tracker.increment_depth()
+                self._tracker.mark_followed(action.url, effective_depth)
             return ReferenceTrackingObservation(
                 command=cmd,
                 url=action.url,
                 outcome="success",
-                current_depth=self._tracker.current_depth,
+                current_depth=effective_depth,
                 max_depth=self._tracker.max_depth,
-                result="URL marked as followed and depth incremented",
+                result="URL marked as followed",
             )
 
         if cmd == "classify":

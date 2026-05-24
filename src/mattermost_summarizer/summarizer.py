@@ -8,8 +8,6 @@ import time
 from pathlib import Path
 
 from openhands.sdk import LocalConversation
-from openhands.sdk.event.llm_convertible.observation import ObservationEvent
-from openhands.tools.delegate.definition import DelegateObservation
 
 from mattermost_summarizer.agent import build_orchestrator_agent
 from mattermost_summarizer.client import MattermostClient
@@ -32,7 +30,6 @@ from mattermost_summarizer.subagents import register_subagents
 from mattermost_summarizer.tools.reference_tracker import (
     ClassifiedUrl,
     ReferenceTracker,
-    classify_urls_in_text,
 )
 from mattermost_summarizer.utils import parse_permalink
 from mattermost_summarizer.visualizer import FileConversationVisualizer
@@ -157,46 +154,32 @@ class MattermostSummarizer:
                     finish_seen_ref[0] = True
                     conv_ref[0].pause()
 
-            pause_callback = _make_pause_after_delegation_callback(conv_ref)
-
+            # NOTE: The Python-side pause-and-inject loop (pause_callback + URL injection) has
+            # been removed.  Reference injection is now handled transparently inside
+            # FetchReferenceExecutor — it appends the "References found" block directly to the
+            # tool observation that the orchestrator LLM receives.
             conversation = LocalConversation(
                 agent=agent,
                 workspace=tmpdir,
                 visualizer=visualizer,
-                callbacks=[_on_finish_callback, pause_callback.callback],
+                callbacks=[_on_finish_callback],
             )
             conv_ref[0] = conversation
 
             conversation.send_message(message)  # type: ignore[arg-type, misc]
 
-            _MAX_DELEGATION_ITERATIONS = 20
-            for _iteration in range(_MAX_DELEGATION_ITERATIONS):
+            max_delegation_iterations = 20
+            for _iteration in range(max_delegation_iterations):
                 if finish_seen_ref[0]:
                     break
-                pause_callback.reset()
                 conversation.run()  # type: ignore[misc]
 
                 if finish_seen_ref[0]:
                     break
-
-                delegate_text = _extract_last_delegate_observation(conversation)
-                if not delegate_text:
-                    # No delegation observed — orchestrator went straight to finish or
-                    # something unexpected occurred; exit the loop.
-                    break
-
-                classified_urls = classify_urls_in_text(delegate_text, tracker)
-
-                if classified_urls:
-                    url_message = format_url_injection_message(classified_urls, tracker)
-                    if url_message:
-                        conversation.send_message(url_message)  # type: ignore[arg-type, misc]
-                # If no classified_urls: no message injected; loop continues and run()
-                # will let the orchestrator proceed to synthesize and call finish.
             else:
                 logging.getLogger(__name__).warning(
                     "Summarization loop reached max iterations (%d) without finishing.",
-                    _MAX_DELEGATION_ITERATIONS,
+                    max_delegation_iterations,
                 )
 
             try:
@@ -288,51 +271,9 @@ class MattermostSummarizer:
                 visualizer.close()
 
 
-class _PauseAfterDelegationCallback:
-    """Factory-produced callback that pauses `run()` on the first delegate-command DelegateObservation.
-
-    Usage::
-
-        cb = _make_pause_after_delegation_callback(conv_ref)
-        conversation = LocalConversation(..., callbacks=[..., cb.callback])
-        # Before each conv.run() call:
-        cb.reset()
-        conversation.run()
-    """
-
-    def __init__(self, conv_ref: list[LocalConversation | None]) -> None:
-        self._conv_ref = conv_ref
-        self._fired = False
-
-    def reset(self) -> None:
-        """Re-arm the callback for the next run() segment."""
-        self._fired = False
-
-    def callback(self, event: object) -> None:
-        if self._fired:
-            return
-        if not isinstance(event, ObservationEvent):
-            return
-        if not isinstance(event.observation, DelegateObservation):
-            return
-        if event.observation.command != "delegate":
-            return
-        self._fired = True
-        conv = self._conv_ref[0]
-        if conv is not None:
-            conv.pause()
-
-
-def _make_pause_after_delegation_callback(
-    conv_ref: list[LocalConversation | None],
-) -> _PauseAfterDelegationCallback:
-    """Create a pause-after-delegation callback bound to *conv_ref*.
-
-    The callback fires exactly once per run() segment (re-armed via ``reset()``).
-    It fires only on ``DelegateObservation`` events where ``command == "delegate"``,
-    ignoring spawn observations and all other event types.
-    """
-    return _PauseAfterDelegationCallback(conv_ref)
+# _PauseAfterDelegationCallback and _make_pause_after_delegation_callback have been
+# removed.  Reference injection is now done inside FetchReferenceExecutor; the
+# Python-side pause-and-inject loop is no longer needed.
 
 
 def _extract_finish_action(conversation: LocalConversation) -> SummarizerFinishActionBase | None:
@@ -381,29 +322,8 @@ def _estimate_thread_length(conversation: LocalConversation) -> int:
     return fetch_count + 1
 
 
-def _extract_last_delegate_observation(conversation: LocalConversation) -> str | None:
-    """Extract text from the most recent delegate-command DelegateObservation.
-
-    Scans conversation.state.events in reverse for the most recent
-    ObservationEvent where observation is a DelegateObservation with
-    command == "delegate".
-    """
-    if not hasattr(conversation, "state") or not conversation.state:
-        return None
-
-    events = getattr(conversation.state, "events", [])
-
-    for event in reversed(events):
-        if isinstance(event, ObservationEvent):
-            if isinstance(event.observation, DelegateObservation):
-                if event.observation.command == "delegate":
-                    text_parts: list[str] = []
-                    for c in event.observation.to_llm_content:
-                        if hasattr(c, "text"):
-                            text_parts.append(c.text)
-                    return "".join(text_parts)
-
-    return None
+# _extract_last_delegate_observation has been removed — no longer used after the
+# Python-side URL-injection loop was replaced by FetchReferenceExecutor's built-in injection.
 
 
 def format_url_injection_message(
@@ -418,8 +338,9 @@ def format_url_injection_message(
     for i, ref in enumerate(classified_urls, 1):
         lines.append(f"{i}. {ref.url}  ({ref.reference_type.value} -> {ref.agent_type})")
 
-    depth_status = "can follow more" if tracker.can_follow_deeper() else "max depth reached"
-    lines.append(f"URLs followed: {tracker.current_depth}/{tracker.max_depth} — {depth_status}")
+    followed_count = len(tracker.followed_urls)
+    depth_status = "can follow more" if followed_count < tracker.max_depth else "max depth reached"
+    lines.append(f"URLs followed: {followed_count}/{tracker.max_depth} — {depth_status}")
     lines.append("")
     lines.append("Decide which (if any) are relevant and call follow_url before delegating.")
 

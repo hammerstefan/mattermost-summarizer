@@ -30,6 +30,10 @@ Your job:
    - Key points from the conversation
    - All URLs/references found in the thread
 
+When listing or mentioning any URLs or references in your summary, always include
+a one-sentence description of what the link is and why it matters — write it
+immediately before or after the URL.
+
 Be thorough in fetching user names - replace user IDs with actual display names in your summary."""
 
 
@@ -42,7 +46,11 @@ Your job:
    - Importance/priority
    - Description and comments
    - Any relevant context from the bug
-3. Call the finish tool with a formatted text summary of the bug findings."""
+3. Call the finish tool with a formatted text summary of the bug findings.
+
+When listing or mentioning any URLs or references in your summary, always include
+a one-sentence description of what the link is and why it matters — write it
+immediately before or after the URL."""
 
 
 GITHUB_RESEARCHER_PROMPT = """You are a GitHub researcher specializing in issues and pull requests.
@@ -55,7 +63,11 @@ Your job:
    - Assignees
    - Comments and review feedback (for PRs)
    - Merge status (for PRs)
-3. Call the finish tool with a formatted text summary of the issue/PR findings."""
+3. Call the finish tool with a formatted text summary of the issue/PR findings.
+
+When listing or mentioning any URLs or references in your summary, always include
+a one-sentence description of what the link is and why it matters — write it
+immediately before or after the URL."""
 
 
 FILE_FETCHER_PROMPT = """You are a file researcher for Mattermost file attachments.

@@ -194,65 +194,82 @@ class TestRecursiveReferenceFollowing:
     """Test recursive reference following depth behavior."""
 
     def test_depth_1_no_recursion(self) -> None:
-        """Task 4.6: Test depth 1 (no recursion, thread only)."""
+        """With max_depth=1, root URL (depth 0) is allowed; pending URL at depth 1 is blocked."""
         from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
 
         tracker = ReferenceTracker(max_depth=1)
-        # At depth 0, can follow 1 level of references
-        assert tracker.can_follow_deeper() is True
-        tracker.increment_depth()
-        # At depth 1, cannot follow deeper (max_depth reached)
-        assert tracker.current_depth == 1
-        assert tracker.can_follow_deeper() is False
+        # Root URL has no pending entry → effective depth 0 < max_depth=1 → allowed
+        assert tracker.get_depth_for("https://chat.example.com/team/pl/root") is None
+
+        # Register a child URL at depth 1 — at max_depth, should be blocked
+        tracker.register_pending("https://github.com/org/repo/issues/1", 1)
+        assert tracker.get_depth_for("https://github.com/org/repo/issues/1") == 1
+        # depth 1 >= max_depth 1 → blocked
+        assert tracker.get_depth_for("https://github.com/org/repo/issues/1") >= tracker.max_depth
 
     def test_depth_2_one_reference(self) -> None:
-        """Task 4.7: Test depth 2 (one referenced thread or bug followed)."""
+        """With max_depth=2, root (depth 0) and depth-1 URLs pass; depth-2 URLs are blocked."""
         from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
 
         tracker = ReferenceTracker(max_depth=2)
-        # Start at depth 0, can follow deeper
-        assert tracker.can_follow_deeper() is True
-        # After processing root thread, depth increments to 1
-        tracker.increment_depth()
-        assert tracker.current_depth == 1
-        assert tracker.can_follow_deeper() is True
-        # After following one reference, depth increments to 2
-        tracker.increment_depth()
-        assert tracker.current_depth == 2
-        assert tracker.can_follow_deeper() is False
+
+        # Root URL (no registration) → depth None → effective 0 < 2 → allowed
+        assert tracker.get_depth_for("https://root.example.com") is None
+
+        # Depth-1 child: allowed
+        tracker.register_pending("https://github.com/org/repo/issues/1", 1)
+        assert tracker.get_depth_for("https://github.com/org/repo/issues/1") == 1
+        assert 1 < tracker.max_depth  # allowed
+
+        # Depth-2 grandchild: blocked
+        tracker.register_pending("https://github.com/org/repo/issues/2", 2)
+        assert tracker.get_depth_for("https://github.com/org/repo/issues/2") == 2
+        assert 2 >= tracker.max_depth  # blocked
 
     def test_depth_3_thread_chain(self) -> None:
-        """Task 4.8: Test depth 3 (thread -> thread -> thread chain)."""
+        """With max_depth=3, a chain root→child(1)→grandchild(2) is allowed; great-grandchild(3) is blocked."""
         from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
 
         tracker = ReferenceTracker(max_depth=3)
-        # Simulate chain: thread A -> thread B -> thread C
-        tracker.increment_depth()  # depth=1: thread_fetcher for thread A
-        assert tracker.current_depth == 1
-        assert tracker.can_follow_deeper() is True
 
-        tracker.increment_depth()  # depth=2: thread_fetcher for thread B
-        assert tracker.current_depth == 2
-        assert tracker.can_follow_deeper() is True
+        # root: depth 0 → allowed
+        root = "https://chat.example.com/team/pl/root"
+        assert tracker.get_depth_for(root) is None  # not registered → depth 0
 
-        tracker.increment_depth()  # depth=3: thread_fetcher for thread C
-        assert tracker.current_depth == 3
-        assert tracker.can_follow_deeper() is False  # max_depth reached
+        # child at depth 1 → allowed
+        child = "https://github.com/org/repo/issues/1"
+        tracker.register_pending(child, 1)
+        assert tracker.get_depth_for(child) == 1
+        assert 1 < tracker.max_depth
+
+        # grandchild at depth 2 → allowed
+        grandchild = "https://bugs.launchpad.net/ubuntu/+bug/1"
+        tracker.register_pending(grandchild, 2)
+        assert tracker.get_depth_for(grandchild) == 2
+        assert 2 < tracker.max_depth
+
+        # great-grandchild at depth 3 → blocked
+        great = "https://github.com/org/repo/issues/2"
+        tracker.register_pending(great, 3)
+        assert tracker.get_depth_for(great) == 3
+        assert 3 >= tracker.max_depth
 
     def test_depth_limit_stops_recursion(self) -> None:
-        """Task 4.9: Verify depth limit stops recursion correctly."""
+        """Verify depth limit stops recursion correctly; reset clears state."""
         from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
 
         tracker = ReferenceTracker(max_depth=2)
-        tracker.increment_depth()  # depth=1
-        tracker.increment_depth()  # depth=2
-        # At max depth, cannot go deeper
-        assert tracker.can_follow_deeper() is False
-        assert tracker.current_depth == 2
-        # Reset should clear depth
+
+        url = "https://github.com/org/repo/issues/1"
+        tracker.register_pending(url, 2)
+        assert tracker.get_depth_for(url) == 2
+        assert 2 >= tracker.max_depth  # blocked
+
+        # Reset should clear both dicts
         tracker.reset()
-        assert tracker.current_depth == 0
-        assert tracker.can_follow_deeper() is True
+        assert len(tracker.followed_urls) == 0
+        assert len(tracker.pending_urls) == 0
+        assert tracker.get_depth_for(url) is None  # no longer registered
 
     def test_cycle_prevention(self) -> None:
         """Test that followed URLs are tracked to prevent cycles."""
@@ -261,7 +278,7 @@ class TestRecursiveReferenceFollowing:
         tracker = ReferenceTracker(max_depth=3)
         url = "https://chat.example.com/team/pl/abc123"
         assert tracker.has_been_followed(url) is False
-        tracker.mark_followed(url)
+        tracker.mark_followed(url, 0)
         assert tracker.has_been_followed(url) is True
         # Should not re-follow same URL
         assert tracker.has_been_followed(url) is True
@@ -347,14 +364,17 @@ class TestReferenceTrackingExecutor:
 
         tracker = ReferenceTracker(max_depth=3)
         executor = ReferenceTrackingExecutor(tracker)
-        action = ReferenceTrackingAction(command="follow_url", url="https://bugs.launchpad.net/ubuntu/+bug/12345")
+        url = "https://bugs.launchpad.net/ubuntu/+bug/12345"
+        # Root URL (no pending entry) → effective depth 0
+        action = ReferenceTrackingAction(command="follow_url", url=url)
 
         result = executor(action)
 
         assert result.outcome == "success"
-        assert result.url == "https://bugs.launchpad.net/ubuntu/+bug/12345"
-        assert tracker.has_been_followed("https://bugs.launchpad.net/ubuntu/+bug/12345")
-        assert tracker.current_depth == 1
+        assert result.url == url
+        assert tracker.has_been_followed(url)
+        # After mark_followed, URL is in followed_urls at depth 0
+        assert tracker.followed_urls[url] == 0
 
     def test_follow_url_already_followed(self) -> None:
         """Test follow_url returns already_followed for duplicate URL."""
@@ -374,10 +394,9 @@ class TestReferenceTrackingExecutor:
 
         result2 = executor(action)
         assert result2.outcome == "already_followed"
-        assert tracker.current_depth == 1
 
     def test_follow_url_depth_exceeded(self) -> None:
-        """Test follow_url returns depth_exceeded at max depth."""
+        """Test follow_url returns depth_exceeded for a URL registered at max depth."""
         from mattermost_summarizer.subagents.reference_tracking_tool import (
             ReferenceTrackingAction,
             ReferenceTrackingExecutor,
@@ -386,17 +405,20 @@ class TestReferenceTrackingExecutor:
 
         tracker = ReferenceTracker(max_depth=1)
         executor = ReferenceTrackingExecutor(tracker)
+
         url1 = "https://bugs.launchpad.net/ubuntu/+bug/12345"
         url2 = "https://bugs.launchpad.net/ubuntu/+bug/67890"
-        action1 = ReferenceTrackingAction(command="follow_url", url=url1)
-        action2 = ReferenceTrackingAction(command="follow_url", url=url2)
 
+        # url1 is root → depth 0 < max_depth 1 → success
+        action1 = ReferenceTrackingAction(command="follow_url", url=url1)
         result1 = executor(action1)
         assert result1.outcome == "success"
 
+        # url2 is registered at depth 1 (at max) → depth_exceeded
+        tracker.register_pending(url2, 1)
+        action2 = ReferenceTrackingAction(command="follow_url", url=url2)
         result2 = executor(action2)
         assert result2.outcome == "depth_exceeded"
-        assert tracker.current_depth == 1
         assert tracker.has_been_followed(url1)
         assert not tracker.has_been_followed(url2)
 
@@ -431,7 +453,6 @@ class TestReferenceTrackingExecutor:
 
         assert "success" in results
         assert "already_followed" in results
-        assert tracker.current_depth == 1
 
     def test_follow_url_requires_url(self) -> None:
         """Test follow_url returns error when URL is missing."""
@@ -491,7 +512,6 @@ class TestOrchestratorPromptUpdated:
 
     def test_prompt_contains_follow_url_instructions(self) -> None:
         """Test that orchestrator prompt explains follow_url usage."""
-        from mattermost_summarizer.agent import ORCHESTRATOR_PROMPT
 
         # assert "follow_url" in ORCHESTRATOR_PROMPT
         # assert "success" in ORCHESTRATOR_PROMPT
@@ -564,7 +584,8 @@ class TestUrlInjectionMessage:
         )
 
         tracker = ReferenceTracker(max_depth=3)
-        tracker.increment_depth()
+        # Simulate one URL already followed
+        tracker.mark_followed("https://chat.example.com/team/pl/root", 0)
         urls = [
             ClassifiedUrl(
                 url="https://bugs.launchpad.net/ubuntu/+bug/12345",
@@ -696,33 +717,38 @@ class TestFetchReferenceInjection:
         """URLs already followed by the tracker are not listed in the References block."""
         executor = self._make_executor()
         already_followed = "https://github.com/canonical/cloud-init/issues/6844"
-        executor._tracker.mark_followed(already_followed)
+        executor._tracker.mark_followed(already_followed, 1)
 
         result_text = f"See {already_followed} and also https://github.com/canonical/cloud-init/pull/6843"
         obs = self._run_with_delegate_result(executor, result_text)
 
         assert obs.error is None
-        # The already-followed URL must not appear in the injected block
+        # The already-followed URL must not appear as a reference entry URL in the injected block
         if "References found in result" in obs.result:
             block = obs.result.split("References found in result")[1]
-            assert already_followed not in block
+            import re
+
+            # Extract only the URL part of each numbered entry (before any ' — ' context)
+            entry_urls = [
+                re.sub(r" —.*$", "", line.strip()).split(" ")[1]
+                for line in block.splitlines()
+                if re.match(r"^\d+\.", line.strip())
+            ]
+            assert already_followed not in entry_urls
             assert "https://github.com/canonical/cloud-init/pull/6843" in block
 
     def test_depth_reached_suppresses_block(self):
         """When max depth is already reached, no References block is appended."""
         executor = self._make_executor()
-        # Root fetch (no increment) + 3 increments = depth 3 = at/over max
-        executor._tracker.mark_followed("https://chat.canonical.com/canonical/pl/root")
-        for _ in range(3):
-            executor._tracker.increment_depth()
-
-        assert not executor._tracker.can_follow_deeper()
+        # Register the URL-to-fetch at depth == max_depth so it's blocked
+        url_to_fetch = "https://chat.canonical.com/canonical/pl/xyz"
+        executor._tracker.register_pending(url_to_fetch, executor._tracker.max_depth)
 
         result_text = "See PR: https://github.com/canonical/cloud-init/pull/6843"
         obs = self._run_with_delegate_result(
             executor,
             result_text,
-            url="https://chat.canonical.com/canonical/pl/xyz",
+            url=url_to_fetch,
         )
 
         # Either depth-error short-circuit or no References block
@@ -732,13 +758,13 @@ class TestFetchReferenceInjection:
             assert "References found in result" not in obs.result
 
     def test_block_contains_depth_info(self):
-        """The injected block includes current depth information."""
+        """The injected block includes depth information."""
         executor = self._make_executor()
         result_text = "PR: https://github.com/canonical/cloud-init/pull/6843"
         obs = self._run_with_delegate_result(executor, result_text)
 
         assert obs.error is None
-        assert "Current depth:" in obs.result
+        assert "Depth:" in obs.result
 
     def test_result_text_preserved_before_block(self):
         """The original result text appears before the References block."""
@@ -752,7 +778,7 @@ class TestFetchReferenceInjection:
         assert "SUMMARY_MARKER" in obs.result[:ref_idx]
 
     def test_unknown_urls_not_in_references_block(self):
-        """Non-followable URLs (docs pages etc.) are excluded from the block."""
+        """Non-followable URLs (docs pages etc.) are excluded as reference entries from the block."""
         executor = self._make_executor()
         result_text = "See https://docs.ubuntu.com/some-page and https://github.com/canonical/cloud-init/issues/9999"
         obs = self._run_with_delegate_result(executor, result_text)
@@ -760,5 +786,86 @@ class TestFetchReferenceInjection:
         assert obs.error is None
         if "References found in result" in obs.result:
             block = obs.result.split("References found in result")[1]
-            assert "docs.ubuntu.com" not in block
+            # docs.ubuntu.com should not appear as a reference entry URL (e.g. "1. https://docs...")
+            import re
+
+            entry_urls = [
+                re.sub(r" —.*$", "", line.strip()).split(" ")[1]
+                for line in block.splitlines()
+                if re.match(r"^\d+\.", line.strip())
+            ]
+            assert not any("docs.ubuntu.com" in u for u in entry_urls)
             assert "https://github.com/canonical/cloud-init/issues/9999" in block
+
+
+class TestPerUrlDepth:
+    """Tests for per-URL depth model (tasks 6.3, 6.4, 6.6)."""
+
+    def test_six_siblings_at_depth_1_all_succeed(self) -> None:
+        """Task 6.3: 6 sibling URLs at depth 1 all pass with max_depth=3."""
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=3)
+        siblings = [f"https://github.com/org/repo/issues/{i}" for i in range(6)]
+
+        # All siblings are registered at depth 1 by the parent injection
+        for url in siblings:
+            tracker.register_pending(url, 1)
+
+        for url in siblings:
+            depth = tracker.get_depth_for(url)
+            assert depth == 1
+            assert depth < tracker.max_depth  # all allowed
+
+    def test_chain_nesting_depth_correct(self) -> None:
+        """Task 6.4: Chain root -> sibling -> child -> grandchild has correct depths."""
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=4)
+
+        root = "https://chat.example.com/team/pl/root"
+        sibling = "https://github.com/org/repo/issues/1"
+        child = "https://bugs.launchpad.net/ubuntu/+bug/100"
+        grandchild = "https://github.com/org/repo/pull/2"
+
+        # root: unregistered -> depth 0
+        assert tracker.get_depth_for(root) is None
+
+        # After fetching root, siblings are registered at depth 1
+        tracker.register_pending(sibling, 1)
+        tracker.mark_followed(root, 0)
+        assert tracker.get_depth_for(sibling) == 1
+
+        # After fetching sibling (depth 1), its children registered at depth 2
+        tracker.register_pending(child, 2)
+        tracker.mark_followed(sibling, 1)
+        assert tracker.get_depth_for(child) == 2
+
+        # After fetching child (depth 2), its grandchildren at depth 3
+        tracker.register_pending(grandchild, 3)
+        tracker.mark_followed(child, 2)
+        assert tracker.get_depth_for(grandchild) == 3
+
+    def test_register_pending_get_depth_mark_followed_lifecycle(self) -> None:
+        """Task 6.6: register_pending -> get_depth_for -> mark_followed lifecycle."""
+        from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
+
+        tracker = ReferenceTracker(max_depth=3)
+        url = "https://github.com/org/repo/issues/42"
+
+        # Before registration: unregistered
+        assert tracker.get_depth_for(url) is None
+        assert not tracker.has_been_followed(url)
+
+        # After registration: in pending_urls
+        tracker.register_pending(url, 1)
+        assert tracker.get_depth_for(url) == 1
+        assert url in tracker.pending_urls
+        assert url not in tracker.followed_urls
+
+        # After mark_followed: moves to followed_urls, removed from pending_urls
+        tracker.mark_followed(url, 1)
+        assert tracker.get_depth_for(url) == 1
+        assert url not in tracker.pending_urls
+        assert url in tracker.followed_urls
+        assert tracker.has_been_followed(url)

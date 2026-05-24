@@ -57,39 +57,32 @@ class FetchReferenceExecutor(ToolExecutor[FetchReferenceAction, FetchReferenceOb
 
         from mattermost_summarizer.tools.reference_tracker import classify_url_full, ReferenceType
 
-        # Classify first to fail-fast on unknown URLs (Point 4)
+        # Classify first to fail-fast on unknown URLs
         classified = classify_url_full(action.url)
         if classified.reference_type == ReferenceType.UNKNOWN:
             return FetchReferenceObservation(result="", error="Unsupported URL type. Cannot follow.")
 
-        # Check cyclic/depth tracking (Point 2)
+        # Depth-based check (per-URL, not global counter)
         with self._tracker.lock():
             if self._tracker.has_been_followed(action.url):
                 return FetchReferenceObservation(result="", error="URL has already been followed (cycle prevented).")
-            if not self._tracker.can_follow_deeper():
+
+            url_depth = self._tracker.get_depth_for(action.url)
+            # Root URLs (never registered) get depth 0 — always allowed
+            effective_depth = url_depth if url_depth is not None else 0
+            if effective_depth >= self._tracker.max_depth:
                 return FetchReferenceObservation(
                     result="", error=f"Maximum reference depth ({self._tracker.max_depth}) reached."
                 )
 
-            # Mark followed. Only increment depth for follow-on references —
-            # the initial root fetch does not consume a depth slot, so that
-            # max_depth=3 allows 3 levels of references rather than 2.
-            is_root_fetch = len(self._tracker.followed_urls) == 0
-            self._tracker.mark_followed(action.url)
-            if not is_root_fetch:
-                self._tracker.increment_depth()
-
-        # Spawn the appropriate sub-agent with a unique ID to avoid clobbering
-        # a previous sub-agent of the same type still registered in DelegateExecutor._sub_agents.
+        # Spawn the appropriate sub-agent with a unique ID
         from openhands.tools.delegate.definition import DelegateAction
 
         agent_id = f"subagent_{classified.agent_type}_{next(self._agent_counter)}"
 
         spawn_action = DelegateAction(command="spawn", ids=[agent_id], agent_types=[classified.agent_type])
-        # Execute spawn (we ignore the output unless it's an error)
         spawn_obs = self._delegate_executor(spawn_action, conversation)  # type: ignore
         if getattr(spawn_obs, "is_error", False):
-            # Rollback tracking just in case
             return FetchReferenceObservation(
                 result="", error=f"Failed to spawn sub-agent: {spawn_obs.to_llm_content[0].text}"
             )
@@ -105,18 +98,31 @@ class FetchReferenceExecutor(ToolExecutor[FetchReferenceAction, FetchReferenceOb
 
         result_text = "\n".join(c.text for c in delegate_obs.to_llm_content if hasattr(c, "text"))
 
-        # Scan the sub-agent's result for new followable URLs and append a
-        # structured "References found" block so the orchestrator knows exactly
-        # which URLs it should consider calling fetch_reference on next.
+        # Mark this URL as followed at its effective depth
+        self._tracker.mark_followed(action.url, effective_depth)
+
+        # Scan the sub-agent's result for new followable URLs.
+        # Pre-register each at child depth before building the block.
         from mattermost_summarizer.tools.reference_tracker import (
             classify_urls_in_text,
             build_reference_following_prompt,
+            extract_sentence_context,
         )
 
         followable = classify_urls_in_text(result_text, self._tracker)
-        # Also filter out URLs that are already at/over depth limit
-        if followable and self._tracker.can_follow_deeper():
-            ref_block = build_reference_following_prompt(followable, self._tracker)
+        child_depth = effective_depth + 1
+
+        if followable and child_depth < self._tracker.max_depth:
+            # Register each followable URL at child_depth (pre-registration)
+            for ref in followable:
+                self._tracker.register_pending(ref.url, child_depth)
+
+            # Extract sentence context for each URL
+            context_sentences = {ref.url: extract_sentence_context(result_text, ref.url) for ref in followable}
+
+            ref_block = build_reference_following_prompt(
+                followable, self._tracker, parent_depth=effective_depth, context_sentences=context_sentences
+            )
             full_result = f"{result_text}\n\n---\nReferences found in result:\n{ref_block}"
         else:
             full_result = result_text

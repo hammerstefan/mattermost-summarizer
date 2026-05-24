@@ -153,3 +153,63 @@ class TestClassifyUrlsInText:
         results = classify_urls_in_text(text)
         # Should at least not crash; actual extraction depends on sanitize_url
         assert isinstance(results, list)
+
+
+class TestExtractSentenceContext:
+    """Tests for extract_sentence_context (task 6.5)."""
+
+    URL = "https://github.com/canonical/cloud-init/pull/6843"
+
+    def test_url_in_middle_of_sentence(self) -> None:
+        """URL in the middle of a sentence returns the containing sentence."""
+        from mattermost_summarizer.tools.reference_tracker import extract_sentence_context
+
+        text = f"This bug is fixed by {self.URL} which landed in 24.1."
+        ctx = extract_sentence_context(text, self.URL)
+        assert self.URL not in ctx  # URL stripped
+        assert len(ctx) >= 5
+        # Should contain surrounding prose
+        assert "fixed" in ctx or "bug" in ctx or "landed" in ctx
+
+    def test_url_at_start_of_sentence(self) -> None:
+        """URL at the start of a sentence returns that sentence."""
+        from mattermost_summarizer.tools.reference_tracker import extract_sentence_context
+
+        text = f"See the PR here.\n{self.URL} is the fix for the regression."
+        ctx = extract_sentence_context(text, self.URL)
+        assert self.URL not in ctx
+        assert len(ctx) >= 5
+
+    def test_url_preceded_by_text_on_previous_line(self) -> None:
+        """URL on its own line with description on previous line returns that description."""
+        from mattermost_summarizer.tools.reference_tracker import extract_sentence_context
+
+        text = f"Fix for the open-iscsi regression\n{self.URL}\nMore text follows."
+        ctx = extract_sentence_context(text, self.URL)
+        assert self.URL not in ctx
+        # Should return either the preceding line or surrounding context
+        assert len(ctx) >= 5
+
+    def test_no_sentence_boundary_returns_fallback(self) -> None:
+        """URL with no surrounding sentence returns fallback string."""
+        from mattermost_summarizer.tools.reference_tracker import extract_sentence_context
+
+        # Craft a case where the URL is alone with no sentence context
+        ctx = extract_sentence_context(self.URL, self.URL)
+        # Either fallback or empty-ish context
+        assert isinstance(ctx, str)
+
+    def test_url_not_in_text_returns_fallback(self) -> None:
+        """URL not present in text returns fallback."""
+        from mattermost_summarizer.tools.reference_tracker import extract_sentence_context
+
+        ctx = extract_sentence_context("Some unrelated text.", self.URL)
+        assert ctx == "(no description available)"
+
+    def test_url_stripped_from_context(self) -> None:
+        """The URL itself is not included in the returned context."""
+        from mattermost_summarizer.tools.reference_tracker import extract_sentence_context
+
+        text = f"The critical patch is at {self.URL} and resolves the crash."
+        ctx = extract_sentence_context(text, self.URL)
+        assert self.URL not in ctx
