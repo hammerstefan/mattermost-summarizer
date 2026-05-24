@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from openhands.sdk import Action, Observation
 from openhands.sdk.llm.message import TextContent
 from openhands.sdk.tool import ToolExecutor
-from openhands.sdk.tool.tool import ToolDefinition
+from openhands.sdk.tool.tool import DeclaredResources, ToolDefinition
 
 if TYPE_CHECKING:
     from mattermost_summarizer.tools.reference_tracker import ReferenceTracker
@@ -55,7 +55,7 @@ class FetchReferenceExecutor(ToolExecutor[FetchReferenceAction, FetchReferenceOb
         if not action.url:
             return FetchReferenceObservation(result="", error="URL required")
 
-        from mattermost_summarizer.tools.reference_tracker import classify_url_full, ReferenceType
+        from mattermost_summarizer.tools.reference_tracker import ReferenceType, classify_url_full
 
         # Classify first to fail-fast on unknown URLs
         classified = classify_url_full(action.url)
@@ -104,8 +104,8 @@ class FetchReferenceExecutor(ToolExecutor[FetchReferenceAction, FetchReferenceOb
         # Scan the sub-agent's result for new followable URLs.
         # Pre-register each at child depth before building the block.
         from mattermost_summarizer.tools.reference_tracker import (
-            classify_urls_in_text,
             build_reference_following_prompt,
+            classify_urls_in_text,
             extract_sentence_context,
         )
 
@@ -134,6 +134,11 @@ class FetchReferenceTool(ToolDefinition[FetchReferenceAction, FetchReferenceObse
     """Tool for fetching a reference URL, safely handling depth/cycle tracking."""
 
     name = "fetch_reference"
+
+    def declared_resources(self, action: FetchReferenceAction) -> DeclaredResources:  # type: ignore[override]
+        # Each URL fetch is independent; lock on the URL to prevent duplicate fetches
+        # of the same URL, but allow different URLs to run concurrently.
+        return DeclaredResources(keys=(f"url:{action.url}",), declared=True)
 
     @classmethod
     def create(
