@@ -21,6 +21,17 @@ token = "your-mattermost-token"
 model = "openai/gpt-4o"
 api_key = "your-llm-api-key"
 base_url = "https://api.openai.com/v1"  # optional
+
+[github]
+token = "ghp_..."  # optional; raises GitHub API rate limit
+
+[summarizer]
+default_level = "normal"       # brief, normal, or detailed (default: normal)
+max_reference_depth = 3        # max recursion depth for following referenced URLs (0=disabled, default: 3)
+critic_enabled = true          # enable LLM critic for iterative refinement (default: true)
+critic_threshold = 0.7         # quality threshold 0-1 for accepting summaries (default: 0.7)
+critic_max_iterations = 2      # max critic revision rounds (default: 2)
+max_sub_agents = 500           # max sub-agents spawned during reference following (default: 500)
 ```
 
 ### Using GitHub Copilot
@@ -49,10 +60,21 @@ You can use environment variables with `MM_` prefix instead of a config file:
 ```bash
 export MM_MATTERMOST_URL=https://chat.canonical.com
 export MM_MATTERMOST_TOKEN=your-token
+export MM_LLM_MODEL=openai/gpt-4o
 export MM_LLM_API_KEY=your-key
+export MM_LLM_BASE_URL=https://api.openai.com/v1
+export MM_GITHUB_TOKEN=ghp_...              # optional
+export MM_SUMMARIZER_DEFAULT_LEVEL=detailed  # brief, normal, or detailed
+export MM_SUMMARIZER_MAX_REFERENCE_DEPTH=3
+export MM_SUMMARIZER_CRITIC_ENABLED=true
+export MM_SUMMARIZER_CRITIC_THRESHOLD=0.7
+export MM_SUMMARIZER_CRITIC_MAX_ITERATIONS=2
+export MM_SUMMARIZER_MAX_SUB_AGENTS=500
 ```
 
 ## Usage
+
+### Python API
 
 ```python
 from mattermost_summarizer import MattermostSummarizer
@@ -63,6 +85,20 @@ result = summarizer.summarize("https://chat.canonical.com/canonical/pl/abc123xyz
 print(result)  # Pretty formatted output
 print(result.tldr)  # Just the TL;DR
 ```
+
+### CLI
+
+```bash
+uv run python summarize.py https://chat.canonical.com/canonical/pl/post_id
+```
+
+Additional CLI options:
+
+| Option | Description |
+|--------|-------------|
+| `--config`, `-c` | Path to TOML config file (default: mattermost-summarizer.toml) |
+| `--output`, `-o` | Output format: `text` or `json` (default: text) |
+| `--level`, `-l` | Summarization level: `brief`, `normal`, or `detailed` (overrides config default_level) |
 
 ## License
 
