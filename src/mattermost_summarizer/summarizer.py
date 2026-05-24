@@ -196,28 +196,25 @@ class MattermostSummarizer:
 
                 duration = time.time() - start_time
 
-                cost = 0.0
                 input_tokens = 0
                 output_tokens = 0
                 cache_read_tokens = 0
                 cache_write_tokens = 0
                 reasoning_tokens = 0
 
-                if hasattr(agent.llm, "metrics") and agent.llm.metrics:
-                    cost = getattr(agent.llm.metrics, "accumulated_cost", 0.0)
-                    token_usage = getattr(agent.llm.metrics, "accumulated_token_usage", None)
-                    if token_usage:
-                        input_tokens = (
-                            getattr(token_usage, "prompt_tokens", 0) or getattr(token_usage, "input_tokens", 0) or 0
-                        )
-                        output_tokens = (
-                            getattr(token_usage, "completion_tokens", 0)
-                            or getattr(token_usage, "output_tokens", 0)
-                            or 0
-                        )
-                        cache_read_tokens = getattr(token_usage, "cache_read_tokens", 0) or 0
-                        cache_write_tokens = getattr(token_usage, "cache_write_tokens", 0) or 0
-                        reasoning_tokens = getattr(token_usage, "reasoning_tokens", 0) or 0
+                combined_metrics = conversation.conversation_stats.get_combined_metrics()
+                cost = combined_metrics.accumulated_cost
+                token_usage = combined_metrics.accumulated_token_usage
+                if token_usage:
+                    input_tokens = (
+                        getattr(token_usage, "prompt_tokens", 0) or getattr(token_usage, "input_tokens", 0) or 0
+                    )
+                    output_tokens = (
+                        getattr(token_usage, "completion_tokens", 0) or getattr(token_usage, "output_tokens", 0) or 0
+                    )
+                    cache_read_tokens = getattr(token_usage, "cache_read_tokens", 0) or 0
+                    cache_write_tokens = getattr(token_usage, "cache_write_tokens", 0) or 0
+                    reasoning_tokens = getattr(token_usage, "reasoning_tokens", 0) or 0
 
                 thread_length = 1
                 if hasattr(finish_action, "tldr"):
