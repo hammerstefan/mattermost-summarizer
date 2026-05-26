@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
     from mattermost_summarizer.client import MattermostClient
 
 from mattermost_summarizer.exceptions import AuthenticationError, ChannelNotFoundError
+
+logger = logging.getLogger(__name__)
 
 
 class FetchChannelAction(Action):
@@ -138,9 +141,10 @@ class FetchChannelExecutor(ToolExecutor[FetchChannelAction, FetchChannelObservat
                 purpose=None,
                 header=None,
                 team_name=None,
-                error=f"Channel not found: {channel_id}",
+                error="Resource not found or access denied.",
             )
         except (AuthenticationError, httpx.HTTPError) as e:
+            logger.warning("Error fetching channel: %s", e)
             return FetchChannelObservation(
                 channel_id=channel_id,
                 name="",
@@ -148,7 +152,7 @@ class FetchChannelExecutor(ToolExecutor[FetchChannelAction, FetchChannelObservat
                 purpose=None,
                 header=None,
                 team_name=None,
-                error=str(e),
+                error="Failed to fetch channel.",
             )
 
 

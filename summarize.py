@@ -24,15 +24,6 @@ _install_tracing_patch()
 def main() -> int:
     from mattermost_summarizer.utils import cleanup_external_loggers, setup_logging
 
-    setup_logging()
-
-    from mattermost_summarizer.config import MattermostSummarizerConfig
-    from mattermost_summarizer.levels import SummaryLevel
-    from mattermost_summarizer.summarizer import MattermostSummarizer
-    from mattermost_summarizer.utils import check_config_file_permissions
-
-    cleanup_external_loggers()
-
     parser = argparse.ArgumentParser(description="Summarize a Mattermost thread")
     parser.add_argument(
         "url",
@@ -58,6 +49,12 @@ def main() -> int:
         default=None,
         help="Summarization level (overrides config default_level)",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose output (info/warning/error to stderr)",
+    )
 
     args = parser.parse_args()
 
@@ -66,6 +63,9 @@ def main() -> int:
         print(f"Error: Config file not found: {config_path}", file=sys.stderr)
         return 1
 
+    from mattermost_summarizer.config import MattermostSummarizerConfig
+    from mattermost_summarizer.utils import check_config_file_permissions
+
     check_config_file_permissions(config_path)
 
     try:
@@ -73,6 +73,14 @@ def main() -> int:
     except Exception as e:
         print(f"Error loading config: {e}", file=sys.stderr)
         return 1
+
+    verbose = args.verbose or config.verbose or os.environ.get("MM_VERBOSE", "").lower() in ("1", "true", "yes")
+    setup_logging(verbose=verbose)
+
+    cleanup_external_loggers()
+
+    from mattermost_summarizer.levels import SummaryLevel
+    from mattermost_summarizer.summarizer import MattermostSummarizer
 
     level = config.summarizer_default_level
     if args.level is not None:

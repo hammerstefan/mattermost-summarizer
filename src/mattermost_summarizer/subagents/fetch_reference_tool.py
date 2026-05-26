@@ -88,9 +88,8 @@ class FetchReferenceExecutor(ToolExecutor[FetchReferenceAction, FetchReferenceOb
         spawn_action = DelegateAction(command="spawn", ids=[agent_id], agent_types=[classified.agent_type])
         spawn_obs = self._delegate_executor(spawn_action, conversation)  # type: ignore
         if getattr(spawn_obs, "is_error", False):
-            return FetchReferenceObservation(
-                result="", error=f"Failed to spawn sub-agent: {spawn_obs.to_llm_content[0].text}"
-            )
+            logger.error("Failed to spawn sub-agent for %s", action.url)
+            return FetchReferenceObservation(result="", error="Failed to spawn sub-agent.")
 
         # Delegate the task to the spawned agent
         task_desc = (

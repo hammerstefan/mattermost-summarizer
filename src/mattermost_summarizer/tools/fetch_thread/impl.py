@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
     from mattermost_summarizer.client import MattermostClient
 
 from mattermost_summarizer.exceptions import AuthenticationError, ThreadNotFoundError
+
+logger = logging.getLogger(__name__)
 
 
 class FetchThreadAction(Action):
@@ -123,13 +126,14 @@ class FetchThreadExecutor(ToolExecutor[FetchThreadAction, FetchThreadObservation
                 error=None,
             )
         except (AuthenticationError, ThreadNotFoundError, httpx.HTTPError) as e:
+            logger.warning("Error fetching thread: %s", e)
             return FetchThreadObservation(
                 root_post={},
                 replies=[],
                 channel_id="",
                 channel_name=None,
                 total_replies=0,
-                error=str(e),
+                error="Failed to fetch thread.",
             )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
     from mattermost_summarizer.client import MattermostClient
 
 from mattermost_summarizer.exceptions import AuthenticationError, FileNotFoundError, ThreadNotFoundError
+
+logger = logging.getLogger(__name__)
 
 
 class FetchFileAction(Action):
@@ -73,11 +76,12 @@ class FetchFileExecutor(ToolExecutor[FetchFileAction, FetchFileObservation]):
                 error=None,
             )
         except (AuthenticationError, FileNotFoundError, ThreadNotFoundError, httpx.HTTPError) as e:
+            logger.warning("Error fetching file: %s", e)
             return FetchFileObservation(
                 file_text_content=None,
                 is_binary=False,
                 mime_type=None,
-                error=str(e),
+                error="Failed to fetch file.",
             )
 
 

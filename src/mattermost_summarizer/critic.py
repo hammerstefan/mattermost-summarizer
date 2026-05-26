@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Any, ClassVar
 
@@ -11,6 +12,8 @@ from openhands.sdk.llm.message import Message, TextContent
 from pydantic import BaseModel, Field
 
 from mattermost_summarizer.levels import SummarizerFinishActionBase, SummaryLevel
+
+logger = logging.getLogger(__name__)
 
 
 class CriticEvaluation(BaseModel):
@@ -264,9 +267,10 @@ Return ONLY valid JSON, no additional text."""
                 feedback=str(result.get("feedback", "No feedback provided.")),
             )
         except (json.JSONDecodeError, ValueError, AttributeError) as e:
+            logger.debug("Critic JSON parsing failed: %s", e)
             return CriticEvaluation(
                 score=0.5,
-                feedback=f"Critic evaluation failed due to parsing error: {e}. Assuming fair quality.",
+                feedback="Critic evaluation failed due to parsing error. Assuming fair quality.",
             )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Any
 
@@ -12,6 +13,8 @@ from openhands.sdk.tool.tool import ToolAnnotations, ToolDefinition
 from pydantic import Field
 
 from mattermost_summarizer.ssrf import check_url_ssrf
+
+logger = logging.getLogger(__name__)
 
 
 class FetchLaunchpadBugAction(Action):
@@ -93,9 +96,11 @@ class FetchLaunchpadBugExecutor(ToolExecutor[FetchLaunchpadBugAction, FetchLaunc
                 error=None,
             )
         except httpx.HTTPError as e:
-            return FetchLaunchpadBugObservation(error=f"HTTP error: {e}")
+            logger.warning("Connection error fetching Launchpad bug: %s", e)
+            return FetchLaunchpadBugObservation(error="Connection failed. Check network connectivity.")
         except Exception as e:
-            return FetchLaunchpadBugObservation(error=str(e))
+            logger.error("Unexpected error in Launchpad bug fetch: %s", e, exc_info=True)
+            return FetchLaunchpadBugObservation(error="An internal error occurred.")
 
     def _parse_bug_id(self, bug_url_or_id: str) -> str | None:
         import re

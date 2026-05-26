@@ -114,6 +114,10 @@ class MattermostSummarizerConfig(BaseSettings):
         default=True,
         description="Whether to log blocked SSRF attempts (default: True)",
     )
+    verbose: bool = Field(
+        default=False,
+        description="Enable verbose output (stderr for info/warning/error logs, default: False)",
+    )
 
     @classmethod
     def from_config(cls, path: Path | str) -> "MattermostSummarizerConfig":

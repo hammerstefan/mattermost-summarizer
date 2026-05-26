@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from typing import Any
@@ -13,6 +14,8 @@ from openhands.sdk.tool.tool import ToolAnnotations, ToolDefinition
 from pydantic import Field, SecretStr
 
 from mattermost_summarizer.ssrf import check_url_ssrf
+
+logger = logging.getLogger(__name__)
 
 
 class FetchGitHubIssueAction(Action):
@@ -157,14 +160,18 @@ class FetchGitHubIssueExecutor(ToolExecutor[FetchGitHubIssueAction, FetchGitHubI
             )
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (403, 429):
+                logger.info("GitHub API rate limited")
                 return FetchGitHubIssueObservation(
                     error="GitHub API rate limit exceeded. Configure github_token in your config to increase limits."
                 )
-            return FetchGitHubIssueObservation(error=f"HTTP error: {e}")
+            logger.warning("GitHub API error: HTTP %s", e.response.status_code)
+            return FetchGitHubIssueObservation(error="GitHub API error. Try again later.")
         except httpx.HTTPError as e:
-            return FetchGitHubIssueObservation(error=f"HTTP error: {e}")
+            logger.warning("Connection error fetching GitHub: %s", e)
+            return FetchGitHubIssueObservation(error="Connection failed. Check network connectivity.")
         except Exception as e:
-            return FetchGitHubIssueObservation(error=str(e))
+            logger.error("Unexpected error in GitHub fetch: %s", e, exc_info=True)
+            return FetchGitHubIssueObservation(error="An internal error occurred.")
 
     def _parse_url(self, url: str) -> tuple[str, str, int, bool] | None:
         url = url.strip()

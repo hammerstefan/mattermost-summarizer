@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
     from mattermost_summarizer.client import MattermostClient
 
 from mattermost_summarizer.exceptions import AuthenticationError, UserNotFoundError
+
+logger = logging.getLogger(__name__)
 
 
 class GetUserAction(Action):
@@ -62,13 +65,14 @@ class GetUserExecutor(ToolExecutor[GetUserAction, GetUserObservation]):
                 error=None,
             )
         except (AuthenticationError, UserNotFoundError, httpx.HTTPError) as e:
+            logger.warning("Error fetching user: %s", e)
             return GetUserObservation(
                 user_id=action.user_id,
                 username="",
                 display_name="",
                 email=None,
                 nickname=None,
-                error=str(e),
+                error="Failed to fetch user.",
             )
 
 

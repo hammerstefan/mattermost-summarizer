@@ -33,7 +33,7 @@ API tokens (`mattermost_token`, `llm_api_key`, `github_token`) are stored in TOM
 
 ## High Priority Issues (P1)
 
-### [ ] 3. Exception Details Leaked to LLM via `str(e)` 
+### [X] 3. Exception Details Leaked to LLM via `str(e)` 
 **Severity:** MEDIUM  
 **Location:** Multiple `except Exception` blocks
 

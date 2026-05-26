@@ -42,14 +42,14 @@ def check_config_file_permissions(path: Path) -> None:
         pass
 
 
-def setup_logging(log_file: str = "mattermost-summarizer.log") -> None:
-    """Configure Python and OpenHands loggers to write exclusively to a file.
-
-    Removes any default StreamHandler from stdout/stderr and redirects all
-    logging to a FileHandler.
+def setup_logging(log_file: str = "mattermost-summarizer.log", verbose: bool = False) -> None:
+    """Configure Python and OpenHands loggers to write to file and optionally stderr.
 
     Args:
         log_file: Path to the log file (default: mattermost-summarizer.log)
+        verbose: If True, add StreamHandler for info/warning/error to stderr.
+                 Normal mode: all logs → file only (no stderr output).
+                 Verbose mode (-v): info, warning, error → stderr + file; debug → file only.
     """
     file_handler = logging.FileHandler(log_file, mode="a")
     file_handler.setLevel(logging.DEBUG)
@@ -62,6 +62,12 @@ def setup_logging(log_file: str = "mattermost-summarizer.log") -> None:
     root_logger.addHandler(file_handler)
     root_logger.setLevel(logging.DEBUG)
 
+    if verbose:
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setLevel(logging.INFO)
+        stderr_handler.setFormatter(formatter)
+        root_logger.addHandler(stderr_handler)
+
     for logger_name in ("openhands", "LiteLLM", "litellm"):
         logger = logging.getLogger(logger_name)
         while logger.handlers:
@@ -69,6 +75,12 @@ def setup_logging(log_file: str = "mattermost-summarizer.log") -> None:
         logger.addHandler(file_handler)
         logger.setLevel(logging.DEBUG)
         logger.propagate = False
+
+        if verbose:
+            stderr_handler = logging.StreamHandler(sys.stderr)
+            stderr_handler.setLevel(logging.INFO)
+            stderr_handler.setFormatter(formatter)
+            logger.addHandler(stderr_handler)
 
 
 def cleanup_external_loggers() -> None:
