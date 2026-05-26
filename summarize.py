@@ -29,6 +29,7 @@ def main() -> int:
     from mattermost_summarizer.config import MattermostSummarizerConfig
     from mattermost_summarizer.levels import SummaryLevel
     from mattermost_summarizer.summarizer import MattermostSummarizer
+    from mattermost_summarizer.utils import check_config_file_permissions
 
     cleanup_external_loggers()
 
@@ -64,6 +65,8 @@ def main() -> int:
     if not config_path.exists():
         print(f"Error: Config file not found: {config_path}", file=sys.stderr)
         return 1
+
+    check_config_file_permissions(config_path)
 
     try:
         config = MattermostSummarizerConfig.from_config(config_path)

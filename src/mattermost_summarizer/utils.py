@@ -2,12 +2,44 @@
 
 import logging
 import re
+import sys
+from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
 
 from mattermost_summarizer.exceptions import PermalinkError
 
-__all__ = ["PermalinkError", "cleanup_external_loggers", "parse_permalink", "setup_logging"]
+__all__ = [
+    "PermalinkError",
+    "check_config_file_permissions",
+    "cleanup_external_loggers",
+    "parse_permalink",
+    "setup_logging",
+]
+
+
+def check_config_file_permissions(path: Path) -> None:
+    """Check config file permissions and emit a warning if world-readable.
+
+    Args:
+        path: Path to the config file to check
+    """
+    try:
+        resolved = path.resolve()
+        mode = resolved.stat().st_mode
+        if mode & 0o077:
+            octal_mode = f"{mode & 0o7777:04o}"
+            print(
+                f"Warning: Config file '{path}' has permissions {octal_mode} — "
+                f"consider 'chmod 0600 {path.name}' to restrict access.",
+                file=sys.stderr,
+            )
+    except OSError:
+        # File not found already handled upstream in summarize.py.
+        # Remaining OSError (e.g., symlink to deleted target, permission denied
+        # on resolved path) is swallowed to avoid noisy failures for a
+        # non-critical security warning.
+        pass
 
 
 def setup_logging(log_file: str = "mattermost-summarizer.log") -> None:

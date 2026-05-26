@@ -18,6 +18,10 @@ class MattermostSummarizerConfig(BaseSettings):
     Supports TOML as primary config source with MM_ env var override.
     Order of precedence: env var > TOML > defaults.
 
+    SECURITY NOTE: Config files containing tokens MUST have filesystem
+    permissions of `0600` to prevent other local users from reading
+    sensitive values (mattermost_token, llm_api_key, github_token).
+
     Example TOML (mattermost-summarizer.toml):
         [mattermost]
         url = "https://chat.canonical.com"

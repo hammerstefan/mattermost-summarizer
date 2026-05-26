@@ -34,6 +34,8 @@ critic_max_iterations = 2      # max critic revision rounds (default: 2)
 max_sub_agents = 500           # max sub-agents spawned during reference following (default: 500)
 ```
 
+**Security note**: Store tokens in environment variables rather than in TOML files when deploying on multi-user systems — TOML files contain plaintext secrets that require filesystem-level `0600` permissions to protect.
+
 ### Using GitHub Copilot
 
 If you have a GitHub Copilot subscription, you can use it instead of a separate LLM provider. LiteLLM has native support via the `github_copilot/` provider prefix:
@@ -55,7 +57,7 @@ See [docs/gh-copilot.md](docs/gh-copilot.md) for more details.
 
 ### Environment Variables
 
-You can use environment variables with `MM_` prefix instead of a config file:
+You can use environment variables with `MM_` prefix instead of a config file. Environment variables are the recommended approach for production deployments to avoid plaintext secrets on disk.
 
 ```bash
 export MM_MATTERMOST_URL=https://chat.canonical.com

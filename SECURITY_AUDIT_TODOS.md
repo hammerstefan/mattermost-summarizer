@@ -18,7 +18,7 @@ The `sanitize_url()` function only handles IPv6 parsing issues — not internal 
 
 ---
 
-### [ ] 2. API Tokens Stored in Config Files Without Permission Enforcement
+### [X] 2. API Tokens Stored in Config Files Without Permission Enforcement
 **Severity:** HIGH  
 **Location:** `config.py:97-162`, TOML config files
 
