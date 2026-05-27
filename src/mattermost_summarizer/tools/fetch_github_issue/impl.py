@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -82,6 +83,10 @@ class FetchGitHubIssueObservation(Observation):
 class FetchGitHubIssueExecutor(ToolExecutor[FetchGitHubIssueAction, FetchGitHubIssueObservation]):
     """Executor for fetching GitHub issues and pull requests."""
 
+    MAX_RETRIES = 3
+    MAX_RETRY_AFTER_SECS = 60
+    BACKOFF_DELAYS = (1, 2, 4, 8)
+
     def __init__(self, github_token: SecretStr | None = None) -> None:
         self.github_token = github_token
         self._client: httpx.Client | None = None
@@ -98,8 +103,33 @@ class FetchGitHubIssueExecutor(ToolExecutor[FetchGitHubIssueAction, FetchGitHubI
                 base_url="https://api.github.com",
                 headers=headers,
                 timeout=30.0,
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
             )
         return self._client
+
+    def _wait_and_retry(self, retry_after: float | None, attempt: int) -> None:
+        if retry_after is not None:
+            wait = min(retry_after, self.MAX_RETRY_AFTER_SECS)
+        else:
+            wait = self.BACKOFF_DELAYS[min(attempt - 1, len(self.BACKOFF_DELAYS) - 1)]
+        logger.info("Retrying GitHub API request in %ds (attempt %d/%d)", wait, attempt, self.MAX_RETRIES)
+        time.sleep(wait)
+
+    def _is_rate_limit_response(self, response: httpx.Response) -> bool:
+        if response.status_code == 429:
+            return True
+        if response.status_code == 403:
+            return "rate limit" in response.text.lower() or "message" in response.text.lower()
+        return False
+
+    def _parse_retry_after(self, response: httpx.Response) -> float | None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after is None:
+            return None
+        try:
+            return float(retry_after)
+        except ValueError:
+            return None
 
     def close(self) -> None:
         """Close the HTTP client and release resources."""
@@ -127,48 +157,55 @@ class FetchGitHubIssueExecutor(ToolExecutor[FetchGitHubIssueAction, FetchGitHubI
         owner, repo, number, is_pr = parsed
 
         try:
-            issue_data = self._fetch_issue(owner, repo, number)
-            if issue_data is None:
-                return FetchGitHubIssueObservation(error="Issue or PR not found or is private")
+            for attempt in range(1, self.MAX_RETRIES + 1):
+                try:
+                    issue_data = self._fetch_issue(owner, repo, number)
+                    if issue_data is None:
+                        return FetchGitHubIssueObservation(error="Issue or PR not found or is private")
 
-            comments = self._fetch_comments(owner, repo, number)
-            review_comments: list[str] = []
-            merge_status: str | None = None
+                    comments = self._fetch_comments(owner, repo, number)
+                    review_comments: list[str] = []
+                    merge_status: str | None = None
 
-            if is_pr:
-                review_comments = self._fetch_review_comments(owner, repo, number)
-                merge_status = issue_data.get("merged", False) and "merged" or issue_data.get("mergeable_state", "")
+                    if is_pr:
+                        review_comments = self._fetch_review_comments(owner, repo, number)
+                        merge_status = (
+                            issue_data.get("merged", False) and "merged" or issue_data.get("mergeable_state", "")
+                        )
 
-            labels = [label.get("name", "") for label in issue_data.get("labels", [])]
-            assignees = [a.get("login", "") for a in issue_data.get("assignees", [])]
+                    labels = [label.get("name", "") for label in issue_data.get("labels", [])]
+                    assignees = [a.get("login", "") for a in issue_data.get("assignees", [])]
 
-            return FetchGitHubIssueObservation(
-                title=issue_data.get("title"),
-                body=issue_data.get("body"),
-                state=issue_data.get("state"),
-                labels=labels,
-                assignees=assignees,
-                author=issue_data.get("user", {}).get("login"),
-                created_at=issue_data.get("created_at"),
-                updated_at=issue_data.get("updated_at"),
-                comments=comments,
-                total_comments=issue_data.get("comments", 0),
-                is_pull_request=is_pr,
-                review_comments=review_comments if is_pr else None,
-                merge_status=merge_status if is_pr else None,
-                error=None,
-            )
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code in (403, 429):
-                logger.info("GitHub API rate limited")
-                return FetchGitHubIssueObservation(
-                    error="GitHub API rate limit exceeded. Configure github_token in your config to increase limits."
-                )
-            logger.warning("GitHub API error: HTTP %s", e.response.status_code)
+                    return FetchGitHubIssueObservation(
+                        title=issue_data.get("title"),
+                        body=issue_data.get("body"),
+                        state=issue_data.get("state"),
+                        labels=labels,
+                        assignees=assignees,
+                        author=issue_data.get("user", {}).get("login"),
+                        created_at=issue_data.get("created_at"),
+                        updated_at=issue_data.get("updated_at"),
+                        comments=comments,
+                        total_comments=issue_data.get("comments", 0),
+                        is_pull_request=is_pr,
+                        review_comments=review_comments if is_pr else None,
+                        merge_status=merge_status if is_pr else None,
+                        error=None,
+                    )
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code in (403, 429) and self._is_rate_limit_response(e.response):
+                        if attempt < self.MAX_RETRIES:
+                            retry_after = self._parse_retry_after(e.response) if e.response.status_code == 429 else None
+                            self._wait_and_retry(retry_after, attempt + 1)
+                            continue
+                        logger.warning("GitHub API rate limit exceeded after %d attempts", self.MAX_RETRIES)
+                        return FetchGitHubIssueObservation(
+                            error="GitHub API rate limit exceeded. Configure github_token "
+                            "in your config to increase limits."
+                        )
+                    raise
+        except httpx.HTTPError:
             return FetchGitHubIssueObservation(error="GitHub API error. Try again later.")
-        except httpx.HTTPError as e:
-            logger.warning("Connection error fetching GitHub: %s", e)
-            return FetchGitHubIssueObservation(error="Connection failed. Check network connectivity.")
         except Exception as e:
             logger.error("Unexpected error in GitHub fetch: %s", e, exc_info=True)
             return FetchGitHubIssueObservation(error="An internal error occurred.")
@@ -194,8 +231,6 @@ class FetchGitHubIssueExecutor(ToolExecutor[FetchGitHubIssueAction, FetchGitHubI
         response = self.client.get(url)
         if response.status_code == 404:
             return None
-        if response.status_code == 403:
-            raise httpx.HTTPStatusError("Rate limited", response=response, request=response.request)
         response.raise_for_status()
         return response.json()  # type: ignore[no-any-return]
 

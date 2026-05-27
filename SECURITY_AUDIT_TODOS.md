@@ -48,7 +48,7 @@ Examples:
 
 ---
 
-### [ ] 4. No Retry/Backoff for GitHub API Rate Limits
+### [X] 4. No Retry/Backoff for GitHub API Rate Limits
 **Severity:** MEDIUM  
 **Location:** `fetch_github_issue/impl.py:77-97`
 
@@ -138,10 +138,10 @@ The codebase has several security strengths worth preserving:
 
 | # | Issue | Priority | Status |
 |---|-------|----------|--------|
-| 1 | SSRF — Internal network access | P0 | Open |
-| 2 | Config file token permissions | P0 | Open |
-| 3 | Exception detail leakage | P1 | Open |
-| 4 | GitHub API rate limit backoff | P1 | Open |
+| 1 | SSRF — Internal network access | P0 | Done |
+| 2 | Config file token permissions | P0 | Done |
+| 3 | Exception detail leakage | P1 | Done |
+| 4 | GitHub API rate limit backoff | P1 | Done |
 | 5 | Thread content LLM injection | P2 | Open |
 | 6 | Global thread patch scope | P2 | Open |
 | 7 | Log file permissions | P3 | Open |
