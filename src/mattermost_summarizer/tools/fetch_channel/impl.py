@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from mattermost_summarizer.client import MattermostClient
 
 from mattermost_summarizer.exceptions import AuthenticationError, ChannelNotFoundError
+from mattermost_summarizer.sanitization import format_with_delimiter, sanitize_text
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +51,12 @@ class FetchChannelObservation(Observation):
             lines.append(f"Team: {self.team_name}")
 
         if self.purpose:
-            lines.append(f"Purpose: {self.purpose}")
+            lines.append(f"Purpose: {sanitize_text(self.purpose)}")
 
         if self.header:
-            lines.append(f"Header: {self.header}")
+            lines.append(f"Header: {sanitize_text(self.header)}")
 
-        return [TextContent(text="\n".join(lines))]
+        return [TextContent(text=format_with_delimiter("\n".join(lines)))]
 
 
 class FetchChannelExecutor(ToolExecutor[FetchChannelAction, FetchChannelObservation]):

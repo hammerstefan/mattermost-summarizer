@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from mattermost_summarizer.client import MattermostClient
 
 from mattermost_summarizer.exceptions import AuthenticationError, ThreadNotFoundError
+from mattermost_summarizer.sanitization import format_with_delimiter, sanitize_text
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class FetchThreadObservation(Observation):
         root = self.root_post
         root_author = root.get("author_name", root.get("author_id", "Unknown"))
         root_time = root.get("created_at", "unknown time")
-        root_msg = root.get("message", "")
+        root_msg = sanitize_text(str(root.get("message", "")))
         lines.append(f"Root post by @{root_author} at {root_time}:")
         lines.append(f"  {root_msg}")
         lines.append("")
@@ -60,14 +61,14 @@ class FetchThreadObservation(Observation):
             for i, reply in enumerate(self.replies, 1):
                 author = reply.get("author_name", reply.get("author_id", "Unknown"))
                 time = reply.get("created_at", "unknown time")
-                msg = reply.get("message", "")
+                msg = sanitize_text(str(reply.get("message", "")))
                 lines.append(f"{i}. @{author} at {time}:")
                 lines.append(f"   {msg}")
                 lines.append("")
         else:
             lines.append("--- No replies ---")
 
-        return [TextContent(text="\n".join(lines))]
+        return [TextContent(text=format_with_delimiter("\n".join(lines)))]
 
 
 class FetchThreadExecutor(ToolExecutor[FetchThreadAction, FetchThreadObservation]):

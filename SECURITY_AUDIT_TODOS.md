@@ -60,7 +60,7 @@ The `FetchGitHubIssueExecutor` handles 403/429 responses but doesn't implement e
 
 ## Medium Priority Issues (P2)
 
-### [ ] 5. Thread Content Injection into LLM Context
+### [X] 5. Thread Content Injection into LLM Context
 **Severity:** MEDIUM  
 **Location:** `agent.py:19-56` (SYSTEM_PROMPT)
 
@@ -142,7 +142,7 @@ The codebase has several security strengths worth preserving:
 | 2 | Config file token permissions | P0 | Done |
 | 3 | Exception detail leakage | P1 | Done |
 | 4 | GitHub API rate limit backoff | P1 | Done |
-| 5 | Thread content LLM injection | P2 | Open |
+| 5 | Thread content LLM injection | P2 | Done |
 | 6 | Global thread patch scope | P2 | Open |
 | 7 | Log file permissions | P3 | Open |
 | 8 | max_sub_agents bypass | P3 | Open |

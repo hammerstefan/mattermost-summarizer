@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Literal
 
@@ -20,6 +21,9 @@ from mattermost_summarizer.levels.base import (
 from mattermost_summarizer.levels.base import (
     inline_bold as _inline_bold,
 )
+from mattermost_summarizer.sanitization import detect_injection_patterns
+
+logger = logging.getLogger(__name__)
 
 USER_MESSAGE_ADDENDUM = """Level: BRIEF (minimal)
 
@@ -52,8 +56,13 @@ class BriefFinishAction(SummarizerFinishActionBase):
     def coerce_tldr_to_str(cls, v: object) -> str:
         """Coerce tldr to a string if the LLM returns a list."""
         if isinstance(v, list):
-            return "\n".join(str(item) for item in v)  # type: ignore[union-attr]
-        return str(v) if not isinstance(v, str) else v
+            result = "\n".join(str(item) for item in v)  # type: ignore[union-attr]
+        else:
+            result = str(v) if not isinstance(v, str) else v
+        matched = detect_injection_patterns(result)
+        if matched:
+            logger.warning("Potential injection pattern detected in tldr: %s", matched)
+        return result
 
 
 class BriefFinishTool(SummarizerFinishToolBase):

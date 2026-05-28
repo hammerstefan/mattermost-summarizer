@@ -14,6 +14,7 @@ from openhands.sdk.tool import ToolExecutor
 from openhands.sdk.tool.tool import ToolAnnotations, ToolDefinition
 from pydantic import Field, SecretStr
 
+from mattermost_summarizer.sanitization import format_with_delimiter, sanitize_text
 from mattermost_summarizer.ssrf import check_url_ssrf
 
 logger = logging.getLogger(__name__)
@@ -60,24 +61,24 @@ class FetchGitHubIssueObservation(Observation):
 
         lines.append("")
         if self.body:
-            lines.append(f"Description: {self.body}")
+            lines.append(f"Description: {sanitize_text(self.body)}")
 
         if self.comments:
             lines.append("")
             lines.append(f"Comments ({self.total_comments}):")
             for i, comment in enumerate(self.comments, 1):
-                lines.append(f"  {i}. {comment}")
+                lines.append(f"  {i}. {sanitize_text(comment)}")
 
         if self.is_pull_request and self.review_comments:
             lines.append("")
             lines.append(f"Review Comments ({len(self.review_comments)}):")
             for i, comment in enumerate(self.review_comments, 1):
-                lines.append(f"  {i}. {comment}")
+                lines.append(f"  {i}. {sanitize_text(comment)}")
 
         if self.merge_status:
             lines.append(f"\nMerge Status: {self.merge_status}")
 
-        return [TextContent(text="\n".join(lines))]
+        return [TextContent(text=format_with_delimiter("\n".join(lines)))]
 
 
 class FetchGitHubIssueExecutor(ToolExecutor[FetchGitHubIssueAction, FetchGitHubIssueObservation]):

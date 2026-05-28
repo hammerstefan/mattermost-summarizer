@@ -29,6 +29,7 @@ from mattermost_summarizer.levels import (
     SummaryLevel,
     SummaryMeta,
 )
+from mattermost_summarizer.sanitization import format_with_delimiter
 from mattermost_summarizer.subagents import register_subagents
 from mattermost_summarizer.tools.fetch_thread.impl import FetchThreadAction, FetchThreadExecutor
 from mattermost_summarizer.tools.reference_tracker import (
@@ -142,7 +143,7 @@ class MattermostSummarizer:
                 raise AgentStuckError(f"Failed to fetch root thread: {fetch_obs.error}")
 
             root_thread_length = int(fetch_obs.total_replies) + 1
-            thread_text = "\n".join(item.text for item in fetch_obs.to_llm_content)
+            thread_text = format_with_delimiter("\n".join(item.text for item in fetch_obs.to_llm_content))
             message = (
                 f"Summarize this Mattermost thread. The post ID is: {post_id}\n\n{thread_text}\n\n{level_addendum}"
             )
